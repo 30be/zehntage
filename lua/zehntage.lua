@@ -21,7 +21,7 @@ local function load_words()
     if first then
       first = false
     else
-      local front, back, context, notes = line:match("^(.-)\t(.-)\t(.-)\t(.*)$")
+      local front, back, notes, context = line:match("^(.-)|(.-)|(.-)|(.*)$")
       if front then
         words[front:lower()] = { back = back, context = context, notes = notes }
       end
@@ -35,11 +35,11 @@ local function save_words()
   if not f then
     return
   end
-  f:write("front\tback\tcontext\tnotes\n")
+  f:write("front|back|notes|context\n")
   for front, data in pairs(words) do
     local ctx = data.context:gsub("\n", "\\n")
     local notes = (data.notes or ""):gsub("\n", "\\n")
-    f:write(front .. "\t" .. data.back .. "\t" .. ctx .. "\t" .. notes .. "\n")
+    f:write(front .. "|" .. data.back .. "|" .. notes .. "|" .. ctx .. "\n")
   end
   f:close()
 end
