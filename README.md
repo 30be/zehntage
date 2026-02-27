@@ -1,6 +1,6 @@
 # ZehnTage
 
-You have only ten days to learn German vocab? Then ZehnTage (10 days in German) is for you. It will show the word and some additional information, helpful for memorization, and automatically export it for Anki as tsv.
+Only ten days to learn German vocab? ZehnTage ("ten days" in German) is a Neovim plugin that shows word definitions with etymology and usage notes to aid memorization, and automatically exports them as TSV for Anki.
 
 ![Screenshot](shot.png)
 
@@ -20,13 +20,13 @@ LazyVim(recommended):
 },
 ```
 
-Then you need to set the environment variable ```GEMINI_API_KEY```, and it will just work.
-The model used is gemini 2.5 flash lite, which is the fastest model that is intelligent enough for the task. And it's also basically free.
+Set the `GEMINI_API_KEY` environment variable and you're good to go.
+It uses Gemini 2.5 Flash Lite — fast enough to feel instant, smart enough for the task, and essentially free.
 
-You can also just look at the source, its just [lua/zehntage.lua](lua/zehntage.lua).
+The entire plugin is a single file: [lua/zehntage.lua](lua/zehntage.lua).
 
 The initial prompt is [included](PROMPT.md) (Claude Opus 4.6).
 
 ## Anki export
 
-On the anki main screen, click 'import file', then select ```~/.local/share/nvim/zehntage_words.tsv```. Don't forget to use compatible card type!
+In Anki, click "Import File" and select `~/.local/share/nvim/zehntage_words.tsv`. Make sure to use a compatible card type.
