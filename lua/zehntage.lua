@@ -146,6 +146,7 @@ local function show_float(word, translation, notes)
     border = "rounded",
   })
   vim.wo[float_win].wrap = true
+  vim.wo[float_win].linebreak = true
 
   vim.api.nvim_create_autocmd("CursorMoved", {
     buffer = 0,
