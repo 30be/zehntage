@@ -1,0 +1,1 @@
+require("zehntage").setup()
