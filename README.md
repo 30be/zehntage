@@ -1,47 +1,32 @@
-# A Neovim Plugin Template
+# ZehnTage
 
-![GitHub Workflow Status](https://img.shields.io/github/actions/workflow/status/ellisonleao/nvim-plugin-template/lint-test.yml?branch=main&style=for-the-badge)
-![Lua](https://img.shields.io/badge/Made%22with%20Lua-blueviolet.svg?style=for-the-badge&logo=lua)
+You have only ten days to learn German vocab? Then ZehnTage (10 days in German) is for you. It will show the word and some additional information, helpful for memorization, and automatically export it for Anki as tsv.
 
-A template repository for Neovim plugins.
+![Screenshot](shot.png)
 
-## Using it
+## Installation
 
-Via `gh`:
+LazyVim(recommended):
 
+```lua
+{
+    "30be/zehntage",
+    opts = {}, -- no opts are available.
+    ft = { "markdown", "text" },
+    keys = {
+        { "K", "<cmd>ZehnTage<CR>", desc = "ZehnTage add word" }, -- the same as hinting is often set up
+        { "<leader>zc", "<cmd>ZehnTageClear<CR>", desc = "ZehnTage clear word" },
+    },
+},
 ```
-$ gh repo create my-plugin -p ellisonleao/nvim-plugin-template
-```
 
-Via github web page:
+Then you need to set the environment variable ```GEMINI_API_KEY```, and it will just work.
+The model used is gemini 2.5 flash lite, which is the fastest model that is intelligent enough for the task. And it's also basically free.
 
-Click on `Use this template`
+You can also just look at the source, its just [lua/zehntage.lua](lua/zehntage.lua).
 
-![](https://docs.github.com/assets/cb-36544/images/help/repository/use-this-template-button.png)
+The initial prompt is [included](PROMPT.md) (Claude Opus 4.6).
 
-## Features and structure
+## Anki export
 
-- 100% Lua
-- Github actions for:
-  - running tests using [plenary.nvim](https://github.com/nvim-lua/plenary.nvim) and [busted](https://olivinelabs.com/busted/)
-  - check for formatting errors (Stylua)
-  - vimdocs autogeneration from README.md file
-  - luarocks release (LUAROCKS_API_KEY secret configuration required)
-
-### Plugin structure
-
-```
-.
-├── lua
-│   ├── plugin_name
-│   │   └── module.lua
-│   └── plugin_name.lua
-├── Makefile
-├── plugin
-│   └── plugin_name.lua
-├── README.md
-├── tests
-│   ├── minimal_init.lua
-│   └── plugin_name
-│       └── plugin_name_spec.lua
-```
+On the anki main screen, click 'import file', then select ```~/.local/share/nvim/zehntage_words.tsv```. Don't forget to use compatible card type!
