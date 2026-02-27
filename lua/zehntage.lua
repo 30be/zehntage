@@ -122,20 +122,30 @@ local function show_float(word, translation, notes)
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
   vim.api.nvim_buf_add_highlight(buf, -1, "Bold", 0, 0, #word)
 
+  local max_width = 60
   local width = 0
   for _, l in ipairs(lines) do
     width = math.max(width, vim.fn.strdisplaywidth(l))
+  end
+  width = math.min(width + 2, max_width)
+
+  -- Calculate height accounting for wrapped lines
+  local height = 0
+  for _, l in ipairs(lines) do
+    local w = vim.fn.strdisplaywidth(l)
+    height = height + math.max(1, math.ceil(w / width))
   end
 
   float_win = vim.api.nvim_open_win(buf, false, {
     relative = "cursor",
     row = 1,
     col = 0,
-    width = math.min(width + 2, 60),
-    height = #lines,
+    width = width,
+    height = height,
     style = "minimal",
     border = "rounded",
   })
+  vim.wo[float_win].wrap = true
 
   vim.api.nvim_create_autocmd("CursorMoved", {
     buffer = 0,
