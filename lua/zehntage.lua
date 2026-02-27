@@ -53,8 +53,15 @@ local function call_gemini(word, context, callback)
   end
 
   local prompt = string.format(
-    'Given the context below, translate the German word "%s" to English. '
-      .. "Add concise notes for better learning/understanding if any. "
+    'Translate the German word "%s" to English using context below. '
+      .. "Notes: max 15 words. Only something that helps memorize: etymology, word roots, word structure, or a fun fact. "
+      .. "No grammar info, no tense, no repeating context. Empty string if nothing useful. "
+      .. "Examples:\n"
+      .. '- Kutsche→carriage: "From Hungarian kocsi, named after the town Kocs"\n'
+      .. '- Gemütlichkeit→coziness: "Gem- (spirit) + müt (mind) + -lich + -keit"\n'
+      .. '- Schmetterling→butterfly: "From Schmetten (cream) — butterflies were thought to steal milk"\n'
+      .. '- Angst→fear: "Same word borrowed into English as-is"\n'
+      .. '- Zeitgeist→spirit of the time: ""\n'
       .. 'Return ONLY valid JSON: {"translation":"...","notes":"..."}\n\nContext:\n%s',
     word,
     context
