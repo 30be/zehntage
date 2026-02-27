@@ -4,6 +4,7 @@ local tsv_path = vim.fn.stdpath("data") .. "/zehntage_words.tsv"
 local ns = vim.api.nvim_create_namespace("zehntage")
 local words = {}
 local float_win = nil
+local float_buf = nil
 
 vim.api.nvim_set_hl(0, "ZehnTageWord", { underline = true, fg = "#89b4fa" })
 
@@ -112,21 +113,11 @@ end
 
 -- Floating window -----------------------------------------------------------
 
-local function show_float(word, translation, notes)
-  if float_win and vim.api.nvim_win_is_valid(float_win) then
-    vim.api.nvim_set_current_win(float_win)
+local function set_float_content(lines)
+  if not float_buf or not vim.api.nvim_buf_is_valid(float_buf) then
     return
   end
-
-  local lines = { word .. " → " .. translation }
-  if notes and notes ~= "" then
-    table.insert(lines, "")
-    table.insert(lines, notes)
-  end
-
-  local buf = vim.api.nvim_create_buf(false, true)
-  vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
-  vim.api.nvim_buf_add_highlight(buf, -1, "Bold", 0, 0, #word)
+  vim.api.nvim_buf_set_lines(float_buf, 0, -1, false, lines)
 
   local max_width = 60
   local width = 0
@@ -135,14 +126,52 @@ local function show_float(word, translation, notes)
   end
   width = math.min(width + 2, max_width)
 
-  -- Calculate height accounting for wrapped lines
   local height = 0
   for _, l in ipairs(lines) do
     local w = vim.fn.strdisplaywidth(l)
     height = height + math.max(1, math.ceil(w / width))
   end
 
-  float_win = vim.api.nvim_open_win(buf, false, {
+  if float_win and vim.api.nvim_win_is_valid(float_win) then
+    vim.api.nvim_win_set_config(float_win, { width = width, height = height })
+  end
+end
+
+local function open_float(word, translation, notes)
+  if float_win and vim.api.nvim_win_is_valid(float_win) then
+    vim.api.nvim_set_current_win(float_win)
+    return
+  end
+
+  local lines
+  if translation then
+    lines = { word .. " → " .. translation }
+    if notes and notes ~= "" then
+      table.insert(lines, "")
+      table.insert(lines, notes)
+    end
+  else
+    lines = { word .. " → ..." }
+  end
+
+  float_buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(float_buf, 0, -1, false, lines)
+  vim.api.nvim_buf_add_highlight(float_buf, -1, "Bold", 0, 0, #word)
+
+  local max_width = 60
+  local width = 0
+  for _, l in ipairs(lines) do
+    width = math.max(width, vim.fn.strdisplaywidth(l))
+  end
+  width = math.min(width + 2, max_width)
+
+  local height = 0
+  for _, l in ipairs(lines) do
+    local w = vim.fn.strdisplaywidth(l)
+    height = height + math.max(1, math.ceil(w / width))
+  end
+
+  float_win = vim.api.nvim_open_win(float_buf, false, {
     relative = "cursor",
     row = 1,
     col = 0,
@@ -162,6 +191,7 @@ local function show_float(word, translation, notes)
         vim.api.nvim_win_close(float_win, true)
       end
       float_win = nil
+      float_buf = nil
     end,
   })
 end
@@ -213,7 +243,7 @@ local function zehntage()
   end
 
   if words[word] then
-    show_float(word, words[word].back, words[word].notes)
+    open_float(word, words[word].back, words[word].notes)
     return
   end
 
@@ -224,17 +254,23 @@ local function zehntage()
   local context_lines = vim.api.nvim_buf_get_lines(0, start, finish, false)
   local context = table.concat(context_lines, "\n")
 
-  vim.notify("Translating '" .. word .. "'...", vim.log.levels.INFO)
+  -- Show float instantly with loading placeholder
+  open_float(word)
 
   call_gemini(word, context, function(data)
-    words[word] = {
-      back = data.translation or "",
-      context = context,
-      notes = data.notes or "",
-    }
+    local translation = data.translation or ""
+    local notes = data.notes or ""
+    words[word] = { back = translation, context = context, notes = notes }
     save_words()
     highlight_buffer(0)
-    show_float(word, data.translation or "", data.notes or "")
+
+    -- Update float in-place if still open
+    local lines = { word .. " → " .. translation }
+    if notes ~= "" then
+      table.insert(lines, "")
+      table.insert(lines, notes)
+    end
+    set_float_content(lines)
   end)
 end
 
