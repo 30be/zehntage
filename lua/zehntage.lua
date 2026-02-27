@@ -58,7 +58,6 @@ local function call_gemini(word, context, callback)
       .. "No grammar info, no tense, no repeating context. Empty string if nothing useful. "
       .. "Examples:\n"
       .. '- Kutsche→carriage: "From Hungarian kocsi, named after the town Kocs"\n'
-      .. '- Gemütlichkeit→coziness: "Gem- (spirit) + müt (mind) + -lich + -keit"\n'
       .. '- Schmetterling→butterfly: "From Schmetten (cream) — butterflies were thought to steal milk"\n'
       .. '- Angst→fear: "Same word borrowed into English as-is"\n'
       .. '- Zeitgeist→spirit of the time: ""\n'
@@ -83,7 +82,7 @@ local function call_gemini(word, context, callback)
     "x-goog-api-key: " .. api_key,
     "-d",
     body,
-    "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+    "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent",
   }, {}, function(result)
     vim.schedule(function()
       if result.code ~= 0 then
