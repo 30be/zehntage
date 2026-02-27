@@ -1,0 +1,52 @@
+*zehntage.txt*    German vocab builder for Neovim         *zehntage*
+
+Only ten days to learn German vocab? ZehnTage ("ten days" in German)
+is a Neovim plugin that shows word definitions with etymology and
+usage notes to aid memorization, and automatically exports them as
+TSV for Anki.
+
+==============================================================================
+INSTALLATION                                          *zehntage-installation*
+
+LazyVim (recommended): >lua
+    {
+        "30be/zehntage",
+        opts = {},
+        ft = { "markdown", "text" },
+        keys = {
+            { "K", "<cmd>ZehnTage<CR>", desc = "ZehnTage add word" },
+            { "<leader>zc", "<cmd>ZehnTageClear<CR>", desc = "ZehnTage clear word" },
+        },
+    },
+<
+
+Set the `GEMINI_API_KEY` environment variable and you're good to go.
+Uses Gemini 2.5 Flash Lite.
+
+==============================================================================
+COMMANDS                                                *zehntage-commands*
+
+:ZehnTage                                                       *:ZehnTage*
+    Translate the word under the cursor using Gemini and add it to the
+    word list. Shows a floating window with translation and notes.
+    If the word is already known, shows the cached translation.
+
+:ZehnTageClear                                               *:ZehnTageClear*
+    Remove the word under the cursor from the word list.
+
+==============================================================================
+HIGHLIGHTING                                        *zehntage-highlighting*
+
+Words in the word list are underlined in markdown and text buffers.
+The highlight group is `ZehnTageWord`.
+
+==============================================================================
+ANKI EXPORT                                              *zehntage-anki*
+
+Words are stored in TSV format at: >
+    ~/.local/share/nvim/zehntage_words.tsv
+<
+In Anki, click "Import File" and select the TSV.
+
+==============================================================================
+vim:tw=78:ts=8:ft=help:norl:
