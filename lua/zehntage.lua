@@ -37,8 +37,13 @@ local function save_words()
   end
   f:write("front|back|notes|context\n")
   for front, data in pairs(words) do
-    local ctx = data.context:gsub("\n", "\\n")
-    local notes = (data.notes or ""):gsub("\n", "\\n")
+    local ctx = data.context:gsub("\n", " ")
+    -- Bold the learned word in context (case-insensitive)
+    local pattern = "(%f[%w])(" .. front:gsub("%a", function(c)
+      return "[" .. c:upper() .. c:lower() .. "]"
+    end) .. ")(%f[%W])"
+    ctx = ctx:gsub(pattern, "%1<b>%2</b>%3")
+    local notes = (data.notes or ""):gsub("\n", " ")
     f:write(front .. "|" .. data.back .. "|" .. notes .. "|" .. ctx .. "\n")
   end
   f:close()
