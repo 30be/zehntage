@@ -1,4 +1,4 @@
-*zehntage.txt*        For Neovim >= 0.8.0        Last change: 2026 February 27
+*zehntage.txt*        For Neovim >= 0.8.0        Last change: 2026 February 28
 
 ==============================================================================
 Table of Contents                                 *zehntage-table-of-contents*
