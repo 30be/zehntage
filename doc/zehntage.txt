@@ -45,9 +45,9 @@ The initial prompt is included <PROMPT.md> (Claude Opus 4.6).
 
 TRANSLATE                                        *zehntage-zehntage-translate*
 
-Select text in visual mode and run `:'<,'>ZehnTageTranslate` (or press `K`
-in visual mode with the config above) to translate without memorizing the
-word or creating an Anki card.
+Select text in visual mode and run `:'<,'>ZehnTageTranslate` (or press `K` in
+visual mode with the config above) to translate without memorizing the word or
+creating an Anki card.
 
 
 ANKI EXPORT                                    *zehntage-zehntage-anki-export*
