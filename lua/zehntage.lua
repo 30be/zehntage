@@ -51,26 +51,12 @@ end
 
 -- Gemini API ----------------------------------------------------------------
 
-local function call_gemini(word, context, callback)
+local function call_gemini_api(prompt, callback)
   local api_key = vim.env.GEMINI_API_KEY
   if not api_key or api_key == "" then
     vim.notify("GEMINI_API_KEY not set", vim.log.levels.ERROR)
     return
   end
-
-  local prompt = string.format(
-    'Translate the German word "%s" to English using context below. '
-      .. "Notes: max 15 words. Only something that helps memorize: etymology, word roots, word structure, or a fun fact. "
-      .. "No grammar info, no tense, no repeating context. Empty string if nothing useful. "
-      .. "Examples:\n"
-      .. '- Kutsche→carriage: "From Hungarian kocsi, named after the town Kocs"\n'
-      .. '- Schmetterling→butterfly: "From Schmetten (cream) — butterflies were thought to steal milk"\n'
-      .. '- Angst→fear: "Same word borrowed into English as-is"\n'
-      .. '- Zeitgeist→spirit of the time: ""\n'
-      .. 'Return ONLY valid JSON: {"translation":"...","notes":"..."}\n\nContext:\n%s',
-    word,
-    context
-  )
 
   local body = vim.json.encode({
     contents = { { parts = { { text = prompt } } } },
@@ -114,6 +100,23 @@ local function call_gemini(word, context, callback)
       end
     end)
   end)
+end
+
+local function call_gemini(word, context, callback)
+  local prompt = string.format(
+    'Translate the word "%s" to English using context below. '
+      .. "Notes: max 15 words. Only something that helps memorize: etymology, word roots, word structure, or a fun fact. "
+      .. "No grammar info, no tense, no repeating context. Empty string if nothing useful. "
+      .. "Examples:\n"
+      .. '- Kutsche→carriage: "From Hungarian kocsi, named after the town Kocs"\n'
+      .. '- Schmetterling→butterfly: "From Schmetten (cream) — butterflies were thought to steal milk"\n'
+      .. '- Angst→fear: "Same word borrowed into English as-is"\n'
+      .. '- Zeitgeist→spirit of the time: ""\n'
+      .. 'Return ONLY valid JSON: {"translation":"...","notes":"..."}\n\nContext:\n%s',
+    word,
+    context
+  )
+  call_gemini_api(prompt, callback)
 end
 
 -- Floating window -----------------------------------------------------------
@@ -288,6 +291,31 @@ local function zehntage_clear()
   end
 end
 
+local function zehntage_translate(opts)
+  local lines = vim.api.nvim_buf_get_lines(0, opts.line1 - 1, opts.line2, false)
+  local text = table.concat(lines, "\n")
+  if text:match("^%s*$") then
+    return
+  end
+
+  local label = text:gsub("\n", " ")
+  if #label > 40 then
+    label = label:sub(1, 40) .. "…"
+  end
+
+  open_float(label)
+
+  local prompt = string.format(
+    "Translate the following text to English. "
+      .. 'Return ONLY valid JSON: {"translation":"..."}\n\nText:\n%s',
+    text
+  )
+  call_gemini_api(prompt, function(data)
+    local translation = data.translation or ""
+    set_float_content({ label .. " → " .. translation })
+  end)
+end
+
 -- Setup ---------------------------------------------------------------------
 
 M.setup = function()
@@ -295,6 +323,7 @@ M.setup = function()
 
   vim.api.nvim_create_user_command("ZehnTage", zehntage, {})
   vim.api.nvim_create_user_command("ZehnTageClear", zehntage_clear, {})
+  vim.api.nvim_create_user_command("ZehnTageTranslate", zehntage_translate, { range = true })
 
   vim.api.nvim_create_autocmd({ "BufEnter", "TextChanged", "TextChangedI" }, {
     group = vim.api.nvim_create_augroup("ZehnTageHighlight", { clear = true }),

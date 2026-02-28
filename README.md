@@ -16,6 +16,7 @@ LazyVim(recommended):
     keys = {
         { "K", "<cmd>ZehnTage<CR>", desc = "ZehnTage add word" }, -- the same as hinting is often set up
         { "<leader>zc", "<cmd>ZehnTageClear<CR>", desc = "ZehnTage clear word" },
+        { "K", ":ZehnTageTranslate<CR>", desc = "ZehnTage translate selection", mode = "v" },
     },
 },
 ```
@@ -26,6 +27,10 @@ It uses Gemini 2.5 Flash Lite — fast enough to feel instant, smart enough for 
 The entire plugin is a single file: [lua/zehntage.lua](lua/zehntage.lua).
 
 The initial prompt is [included](PROMPT.md) (Claude Opus 4.6).
+
+## Translate
+
+Select text in visual mode and run `:'<,'>ZehnTageTranslate` (or press `K` in visual mode with the config above) to translate without memorizing the word or creating an Anki card.
 
 ## Anki export
 
