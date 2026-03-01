@@ -1,6 +1,7 @@
 local M = {}
 
 local tsv_path = vim.fn.stdpath("data") .. "/zehntage_words.tsv"
+local notes_path = vim.fn.stdpath("data") .. "/zehntage_notes.tsv"
 local ns = vim.api.nvim_create_namespace("zehntage")
 local words = {}
 local float_win = nil
@@ -152,19 +153,26 @@ local function open_float(word, translation, notes)
   end
 
   local lines
-  if translation then
+  local highlight_len = 0
+  if type(word) == "table" then
+    lines = word
+  elseif translation then
     lines = { word .. " → " .. translation }
+    highlight_len = #word
     if notes and notes ~= "" then
       table.insert(lines, "")
       table.insert(lines, notes)
     end
   else
     lines = { word .. " → ..." }
+    highlight_len = #word
   end
 
   float_buf = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_buf_set_lines(float_buf, 0, -1, false, lines)
-  vim.api.nvim_buf_add_highlight(float_buf, -1, "Bold", 0, 0, #word)
+  if highlight_len > 0 then
+    vim.api.nvim_buf_add_highlight(float_buf, -1, "Bold", 0, 0, highlight_len)
+  end
 
   local max_width = 60
   local width = 0
@@ -291,29 +299,67 @@ local function zehntage_clear()
   end
 end
 
-local function zehntage_translate(opts)
-  local lines = vim.api.nvim_buf_get_lines(0, opts.line1 - 1, opts.line2, false)
-  local text = table.concat(lines, "\n")
+local function get_visual_selection()
+  local start_pos = vim.fn.getpos("'<")
+  local end_pos = vim.fn.getpos("'>")
+  local mode = vim.fn.visualmode()
+  local ok, region = pcall(vim.fn.getregion, start_pos, end_pos, { type = mode })
+  if ok and #region > 0 then
+    return table.concat(region, "\n")
+  end
+  -- Fallback for older Neovim
+  local sr, sc = start_pos[2], start_pos[3]
+  local er, ec = end_pos[2], end_pos[3]
+  local buf_lines = vim.api.nvim_buf_get_lines(0, sr - 1, er, false)
+  if #buf_lines == 0 then
+    return ""
+  end
+  if #buf_lines == 1 then
+    buf_lines[1] = buf_lines[1]:sub(sc, ec)
+  else
+    buf_lines[1] = buf_lines[1]:sub(sc)
+    buf_lines[#buf_lines] = buf_lines[#buf_lines]:sub(1, ec)
+  end
+  return table.concat(buf_lines, "\n")
+end
+
+local function zehntage_translate()
+  local text = get_visual_selection()
   if text:match("^%s*$") then
     return
   end
 
-  local label = text:gsub("\n", " ")
-  if #label > 40 then
-    label = label:sub(1, 40) .. "…"
-  end
-
-  open_float(label)
+  open_float({ "Loading..." })
 
   local prompt = string.format(
-    "Translate the following text to English. "
-      .. 'Return ONLY valid JSON: {"translation":"..."}\n\nText:\n%s',
+    "You are a translator. Your ONLY job is to translate the exact text between the delimiters below to English. "
+      .. "Do NOT paraphrase, summarize, or translate any other text. "
+      .. 'Return ONLY valid JSON: {"translation":"..."}\n\n'
+      .. "===BEGIN===\n%s\n===END===",
     text
   )
   call_gemini_api(prompt, function(data)
     local translation = data.translation or ""
-    set_float_content({ label .. " → " .. translation })
+    set_float_content({ translation })
   end)
+end
+
+local function zehntage_note(opts)
+  local text = opts.args
+  if text:match("^%s*$") then
+    vim.notify("Usage: :ZehnTageNote <text>", vim.log.levels.WARN)
+    return
+  end
+  local filename = vim.fn.expand("%:p")
+  local line = vim.api.nvim_win_get_cursor(0)[1]
+  local f = io.open(notes_path, "a")
+  if not f then
+    vim.notify("Cannot write to " .. notes_path, vim.log.levels.ERROR)
+    return
+  end
+  f:write(filename .. "\t" .. line .. "\t" .. text .. "\n")
+  f:close()
+  vim.notify("Note saved", vim.log.levels.INFO)
 end
 
 -- Setup ---------------------------------------------------------------------
@@ -324,6 +370,7 @@ M.setup = function()
   vim.api.nvim_create_user_command("ZehnTage", zehntage, {})
   vim.api.nvim_create_user_command("ZehnTageClear", zehntage_clear, {})
   vim.api.nvim_create_user_command("ZehnTageTranslate", zehntage_translate, { range = true })
+  vim.api.nvim_create_user_command("ZehnTageNote", zehntage_note, { nargs = "+" })
 
   vim.api.nvim_create_autocmd({ "BufEnter", "TextChanged", "TextChangedI" }, {
     group = vim.api.nvim_create_augroup("ZehnTageHighlight", { clear = true }),
