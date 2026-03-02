@@ -78,18 +78,22 @@ local function call_gemini_api(prompt, callback)
     "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent",
   }, {}, function(result)
     vim.schedule(function()
+      local function show_error(msg)
+        set_float_content(vim.split(msg, "\n"))
+      end
+
       if result.code ~= 0 then
-        vim.notify("Gemini request failed: " .. (result.stderr or ""), vim.log.levels.ERROR)
+        show_error("Gemini request failed:\n" .. (result.stderr or ""))
         return
       end
       local ok, resp = pcall(vim.json.decode, result.stdout)
       if not ok then
-        vim.notify("Failed to parse Gemini response", vim.log.levels.ERROR)
+        show_error("Failed to parse Gemini response:\n" .. (result.stdout or ""))
         return
       end
       local text = resp.candidates and resp.candidates[1] and resp.candidates[1].content.parts[1].text
       if not text then
-        vim.notify("Unexpected Gemini response format", vim.log.levels.ERROR)
+        show_error("Unexpected Gemini response:\n" .. (result.stdout or ""))
         return
       end
       text = text:gsub("^```json%s*", ""):gsub("```%s*$", ""):match("^%s*(.-)%s*$")
@@ -97,7 +101,7 @@ local function call_gemini_api(prompt, callback)
       if ok2 then
         callback(data)
       else
-        vim.notify("Gemini returned invalid JSON: " .. text, vim.log.levels.ERROR)
+        show_error("Gemini returned invalid JSON:\n" .. text)
       end
     end)
   end)
