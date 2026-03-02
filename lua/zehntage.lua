@@ -306,14 +306,18 @@ local function zehntage_clear()
 end
 
 local function get_visual_selection()
-  local start_pos = vim.fn.getpos("'<")
-  local end_pos = vim.fn.getpos("'>")
-  local mode = vim.fn.visualmode()
+  -- Use current visual positions (v/., not '</'>) so marks are fresh
+  local start_pos = vim.fn.getpos("v")
+  local end_pos = vim.fn.getpos(".")
+  local mode = vim.fn.mode()
   local ok, region = pcall(vim.fn.getregion, start_pos, end_pos, { type = mode })
   if ok and #region > 0 then
     return table.concat(region, "\n")
   end
-  -- Fallback for older Neovim
+  -- Fallback: exit visual mode first to update '< '>
+  vim.cmd("normal! " .. vim.api.nvim_replace_termcodes("<Esc>", true, false, true))
+  start_pos = vim.fn.getpos("'<")
+  end_pos = vim.fn.getpos("'>")
   local sr, sc = start_pos[2], start_pos[3]
   local er, ec = end_pos[2], end_pos[3]
   local buf_lines = vim.api.nvim_buf_get_lines(0, sr - 1, er, false)
