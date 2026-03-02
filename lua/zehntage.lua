@@ -6,16 +6,6 @@ local ns = vim.api.nvim_create_namespace("zehntage")
 local words = {}
 local float_win = nil
 local float_buf = nil
-local log_path = vim.fn.stdpath("data") .. "/zehntage.log"
-
-local function log(msg)
-  local f = io.open(log_path, "a")
-  if not f then
-    return
-  end
-  f:write(os.date("%Y-%m-%d %H:%M:%S") .. " " .. msg .. "\n")
-  f:close()
-end
 
 vim.api.nvim_set_hl(0, "ZehnTageWord", { underline = true, fg = "#89b4fa" })
 
@@ -89,23 +79,17 @@ local function call_gemini_api(prompt, callback)
   }, {}, function(result)
     vim.schedule(function()
       if result.code ~= 0 then
-        log("ERROR: Gemini request failed (code " .. result.code .. "): " .. (result.stderr or ""))
-        vim.cmd.redraw()
-        vim.notify("Gemini request failed, see " .. log_path, vim.log.levels.ERROR)
+        vim.notify("Gemini request failed: " .. (result.stderr or ""), vim.log.levels.ERROR)
         return
       end
       local ok, resp = pcall(vim.json.decode, result.stdout)
       if not ok then
-        log("ERROR: Failed to parse Gemini response: " .. (result.stdout or ""))
-        vim.cmd.redraw()
-        vim.notify("Failed to parse Gemini response, see " .. log_path, vim.log.levels.ERROR)
+        vim.notify("Failed to parse Gemini response", vim.log.levels.ERROR)
         return
       end
       local text = resp.candidates and resp.candidates[1] and resp.candidates[1].content.parts[1].text
       if not text then
-        log("ERROR: Unexpected Gemini response format: " .. (result.stdout or ""))
-        vim.cmd.redraw()
-        vim.notify("Unexpected Gemini response, see " .. log_path, vim.log.levels.ERROR)
+        vim.notify("Unexpected Gemini response format", vim.log.levels.ERROR)
         return
       end
       text = text:gsub("^```json%s*", ""):gsub("```%s*$", ""):match("^%s*(.-)%s*$")
@@ -113,9 +97,7 @@ local function call_gemini_api(prompt, callback)
       if ok2 then
         callback(data)
       else
-        log("ERROR: Gemini returned invalid JSON: " .. text)
-        vim.cmd.redraw()
-        vim.notify("Gemini returned invalid JSON, see " .. log_path, vim.log.levels.ERROR)
+        vim.notify("Gemini returned invalid JSON: " .. text, vim.log.levels.ERROR)
       end
     end)
   end)
@@ -389,9 +371,6 @@ M.setup = function()
   vim.api.nvim_create_user_command("ZehnTageClear", zehntage_clear, {})
   vim.api.nvim_create_user_command("ZehnTageTranslate", zehntage_translate, { range = true })
   vim.api.nvim_create_user_command("ZehnTageNote", zehntage_note, { nargs = "+" })
-  vim.api.nvim_create_user_command("ZehnTageNotes", function()
-    vim.cmd.edit(notes_path)
-  end, {})
 
   vim.api.nvim_create_autocmd({ "BufEnter", "TextChanged", "TextChangedI" }, {
     group = vim.api.nvim_create_augroup("ZehnTageHighlight", { clear = true }),
