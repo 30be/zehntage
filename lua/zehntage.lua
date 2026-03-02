@@ -50,6 +50,8 @@ local function save_words()
   f:close()
 end
 
+local set_float_content
+
 -- Gemini API ----------------------------------------------------------------
 
 local function call_gemini_api(prompt, callback)
@@ -126,7 +128,7 @@ end
 
 -- Floating window -----------------------------------------------------------
 
-local function set_float_content(lines)
+set_float_content = function(lines)
   if not float_buf or not vim.api.nvim_buf_is_valid(float_buf) then
     return
   end
