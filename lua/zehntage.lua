@@ -118,9 +118,9 @@ local function call_gemini(word, context, callback)
     'Translate the word "%s" to English using context below. '
       .. "Notes: max 15 words. Only something that helps memorize '%s': etymology, word roots, word structure, or a fun fact about it"
       .. "Examples:\n"
-      .. '- Kutsche→carriage: "From Hungarian kocsi, named after the town Kocs. Кучер"\n'
-      .. '- Schmetterling→butterfly: "From Schmetten (cream) — butterflies were thought to steal milk"\n'
-      .. '- Zeitgeist→spirit of the time: literally, Zeit(time) + Geist (spirit)""\n'
+      .. '- プロローグ -> prologue, notes: purorogu - katakana anglicism\n'
+      .. '- Schmetterling -> butterfly, notes: "From Schmetten (cream) — butterflies were thought to steal milk"\n'
+      .. '- Zeitgeist -> spirit of the time"\n'
       .. 'Return ONLY valid JSON: {"translation":"...","notes":"..."}, Use the following context, from which the word was taken:\n\n%s',
     word,
     word,
