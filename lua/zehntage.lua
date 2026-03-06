@@ -40,9 +40,11 @@ local function save_words()
   for front, data in pairs(words) do
     local ctx = data.context:gsub("\n", " ")
     -- Bold the learned word in context (case-insensitive)
-    local pattern = "(%f[%w])(" .. front:gsub("%a", function(c)
-      return "[" .. c:upper() .. c:lower() .. "]"
-    end) .. ")(%f[%W])"
+    local pattern = "(%f[%w])("
+      .. front:gsub("%a", function(c)
+        return "[" .. c:upper() .. c:lower() .. "]"
+      end)
+      .. ")(%f[%W])"
     ctx = ctx:gsub(pattern, "%1<b>%2</b>%3")
     local notes = (data.notes or ""):gsub("\n", " ")
     f:write(front .. "|" .. data.back .. "|" .. notes .. "|" .. ctx .. "\n")
@@ -114,14 +116,13 @@ end
 local function call_gemini(word, context, callback)
   local prompt = string.format(
     'Translate the word "%s" to English using context below. '
-      .. "Notes: max 15 words. Only something that helps memorize: etymology, word roots, word structure, or a fun fact. "
-      .. "No grammar info, no tense, no repeating context. Empty string if nothing useful. "
+      .. "Notes: max 15 words. Only something that helps memorize '%s': etymology, word roots, word structure, or a fun fact about it"
       .. "Examples:\n"
-      .. '- Kutsche→carriage: "From Hungarian kocsi, named after the town Kocs"\n'
+      .. '- Kutsche→carriage: "From Hungarian kocsi, named after the town Kocs. Кучер"\n'
       .. '- Schmetterling→butterfly: "From Schmetten (cream) — butterflies were thought to steal milk"\n'
-      .. '- Angst→fear: "Same word borrowed into English as-is"\n'
-      .. '- Zeitgeist→spirit of the time: ""\n'
-      .. 'Return ONLY valid JSON: {"translation":"...","notes":"..."}\n\nContext:\n%s',
+      .. '- Zeitgeist→spirit of the time: literally, Zeit(time) + Geist (spirit)""\n'
+      .. 'Return ONLY valid JSON: {"translation":"...","notes":"..."}, Use the following context, from which the word was taken:\n\n%s',
+    word,
     word,
     context
   )
@@ -345,7 +346,6 @@ local function zehntage_translate()
 
   local prompt = string.format(
     "You are a translator. Your ONLY job is to translate the exact text between the delimiters below to English. "
-      .. "Do NOT paraphrase, summarize, or translate any other text. "
       .. 'Return ONLY valid JSON: {"translation":"..."}\n\n'
       .. "===BEGIN===\n%s\n===END===",
     text
