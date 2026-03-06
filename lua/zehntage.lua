@@ -167,11 +167,11 @@ local function call_gemini(word, context, callback)
   local prompt = string.format(
     'Translate "%s" to English. Add a short note (max 15-20 words) to help memorize it: etymology, structure, related word, or mnemonic. For japanese, add pronunciation in brackets\n'
       .. "Format: 'translation: note' (without quotes)\n"
-      .. "Examples:\n"
-      .. "- Schmetterling -> 'butterfly: From Schmetten (cream) — butterflies were thought to steal milk'\n"
-      .. "- プロローグ -> 'prologue (purorog): Direct loanword from english'\n"
-      .. "- 憧れ -> 'longing (akogare): a heart (忄) in a childlike (童) state — reaching toward something desired'\n"
-      .. "- Zeitgeist -> 'spirit of time'\n"
+      .. "Example outputs for Schmetterling, プロローグ, 憧れ, Zeitgeist:\n"
+      .. "'butterfly: From Schmetten (cream) — butterflies were thought to steal milk'\n"
+      .. "'prologue (purorog): Direct loanword from english'\n"
+      .. "'longing (akogare): a heart (忄) in a childlike (童) state — reaching toward something desired'\n"
+      .. "'spirit of time'\n"
       .. "Context:\n\n%s",
     word,
     context
