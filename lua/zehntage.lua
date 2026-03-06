@@ -54,68 +54,109 @@ end
 
 local set_float_content
 
--- Gemini API ----------------------------------------------------------------
+-- Gemini API (persistent connection) ----------------------------------------
+
+local proxy_script = [[
+import sys, json, http.client
+conn = http.client.HTTPSConnection("generativelanguage.googleapis.com")
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    req = json.loads(line)
+    for _ in range(2):
+        try:
+            conn.request("POST", req["p"], req["d"], req["h"])
+            resp = conn.getresponse()
+            print(json.dumps(json.loads(resp.read())), flush=True)
+            break
+        except Exception:
+            conn = http.client.HTTPSConnection("generativelanguage.googleapis.com")
+]]
+
+local proxy_job = nil
+local proxy_partial = ""
+local proxy_callbacks = {}
+
+local function ensure_proxy()
+  if proxy_job then return end
+  proxy_job = vim.fn.jobstart({ "python3", "-c", proxy_script }, {
+    stdout_buffered = false,
+    on_stdout = function(_, data)
+      if not data then return end
+      data[1] = proxy_partial .. data[1]
+      proxy_partial = data[#data]
+      for i = 1, #data - 1 do
+        if data[i] ~= "" and #proxy_callbacks > 0 then
+          local cb = table.remove(proxy_callbacks, 1)
+          local line = data[i]
+          vim.schedule(function() cb(line) end)
+        end
+      end
+    end,
+    on_exit = function()
+      proxy_job = nil
+      proxy_partial = ""
+    end,
+  })
+  if proxy_job <= 0 then proxy_job = nil end
+end
 
 local function call_gemini_api(prompt, callback)
   local api_key = vim.env.GEMINI_API_KEY
   if not api_key or api_key == "" then
-    vim.notify("GEMINI_API_KEY not set", vim.log.levels.ERROR)
+    set_float_content({ "GEMINI_API_KEY not set" })
     return
   end
 
+  ensure_proxy()
+  if not proxy_job then
+    set_float_content({ "Failed to start proxy (python3 required)" })
+    return
+  end
+
+  local model = vim.env.ZEHNTAGE_MODEL or "gemini-3.1-flash-lite-preview"
   local body = vim.json.encode({
     contents = { { parts = { { text = prompt } } } },
     generation_config = { temperature = 0.2 },
   })
 
-  vim.system({
-    "curl",
-    "-s",
-    "-X",
-    "POST",
-    "-H",
-    "Content-Type: application/json",
-    "-H",
-    "x-goog-api-key: " .. api_key,
-    "-d",
-    body,
-    "https://generativelanguage.googleapis.com/v1beta/models/"
-      .. (vim.env.ZEHNTAGE_MODEL or "gemini-3.1-flash-lite-preview")
-      .. ":generateContent",
-  }, {}, function(result)
-    vim.schedule(function()
-      local function show_error(msg)
-        set_float_content(vim.split(msg, "\n"))
-      end
+  local request = vim.json.encode({
+    p = "/v1beta/models/" .. model .. ":generateContent",
+    h = {
+      ["Content-Type"] = "application/json",
+      ["x-goog-api-key"] = api_key,
+    },
+    d = body,
+  })
 
-      if result.code ~= 0 then
-        show_error("Gemini request failed:\n" .. (result.stderr or ""))
-        return
-      end
-      local ok, resp = pcall(vim.json.decode, result.stdout)
-      if not ok then
-        show_error("Failed to parse Gemini response:\n" .. (result.stdout or ""))
-        return
-      end
-      local text = resp.candidates and resp.candidates[1] and resp.candidates[1].content.parts[1].text
-      if not text then
-        show_error("Unexpected Gemini response:\n" .. (result.stdout or ""))
-        return
-      end
-      text = text:match("^%s*(.-)%s*$")
-      callback(text)
-    end)
+  table.insert(proxy_callbacks, function(response_line)
+    local ok, resp = pcall(vim.json.decode, response_line)
+    if not ok then
+      set_float_content({ "Failed to parse response" })
+      return
+    end
+    local text = resp.candidates and resp.candidates[1]
+      and resp.candidates[1].content.parts[1].text
+    if not text then
+      set_float_content(vim.split("Unexpected response:\n" .. response_line, "\n"))
+      return
+    end
+    text = text:match("^%s*(.-)%s*$")
+    callback(text)
   end)
+
+  vim.fn.chansend(proxy_job, request .. "\n")
 end
 
 local function call_gemini(word, context, callback)
   local prompt = string.format(
-    'Translate "%s" to English. Add a short note (max 15-20 words) to help memorize it: etymology, structure, related word, or mnemonic.\n'
+    'Translate "%s" to English. Add a short note (max 15-20 words) to help memorize it: etymology, structure, related word, or mnemonic. For japanese, add pronunciation in brackets\n'
       .. "Format: 'translation: note' (without quotes)\n"
       .. "Examples:\n"
       .. "- Schmetterling -> 'butterfly: From Schmetten (cream) — butterflies were thought to steal milk'\n"
-      .. "- プロローグ -> 'prologue: Direct loanword from english (purorogu)'\n"
-      .. "- 憧れ -> 'longing: a heart (忄) in a childlike (童) state — reaching toward something desired'\n"
+      .. "- プロローグ -> 'prologue (purorog): Direct loanword from english'\n"
+      .. "- 憧れ -> 'longing (akogare): a heart (忄) in a childlike (童) state — reaching toward something desired'\n"
       .. "- Zeitgeist -> 'spirit of time'\n"
       .. "Context:\n\n%s",
     word,
@@ -378,6 +419,12 @@ M.setup = function()
   vim.api.nvim_create_user_command("ZehnTageClear", zehntage_clear, {})
   vim.api.nvim_create_user_command("ZehnTageTranslate", zehntage_translate, { range = true })
   vim.api.nvim_create_user_command("ZehnTageNote", zehntage_note, { nargs = "+" })
+
+  vim.api.nvim_create_autocmd("VimLeave", {
+    callback = function()
+      if proxy_job then vim.fn.jobstop(proxy_job) end
+    end,
+  })
 
   vim.api.nvim_create_autocmd({ "BufEnter", "TextChanged", "TextChangedI" }, {
     group = vim.api.nvim_create_augroup("ZehnTageHighlight", { clear = true }),
