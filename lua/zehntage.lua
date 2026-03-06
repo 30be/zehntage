@@ -73,10 +73,11 @@ while True:
             resp = conn.getresponse()
             print(json.dumps(json.loads(resp.read())), flush=True)
             break
-        except Exception:
+        except Exception as e:
+            err = str(e)
             conn = http.client.HTTPSConnection("generativelanguage.googleapis.com")
     else:
-        print('{"error":{"message":"connection failed"}}', flush=True)
+        print(json.dumps({"error":{"message":err}}), flush=True)
 ]]
 
 local proxy_job = nil
@@ -96,6 +97,14 @@ local function ensure_proxy()
           local cb = table.remove(proxy_callbacks, 1)
           local line = data[i]
           vim.schedule(function() cb(line) end)
+        end
+      end
+    end,
+    on_stderr = function(_, data)
+      if data then
+        local msg = table.concat(data, "\n"):gsub("^%s+", ""):gsub("%s+$", "")
+        if msg ~= "" then
+          vim.schedule(function() set_float_content(vim.split("Proxy: " .. msg, "\n")) end)
         end
       end
     end,
