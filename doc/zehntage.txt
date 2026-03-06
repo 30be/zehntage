@@ -1,4 +1,4 @@
-*zehntage.txt*          For Neovim >= 0.8.0         Last change: 2026 March 02
+*zehntage.txt*          For Neovim >= 0.8.0         Last change: 2026 March 06
 
 ==============================================================================
 Table of Contents                                 *zehntage-table-of-contents*
@@ -39,7 +39,7 @@ Gemini 2.5 Flash Lite by default — fast enough to feel instant, smart enough
 for the task, and essentially free.
 
 To use a different Gemini model, set the `ZEHNTAGE_MODEL` environment variable
-(e.g. `ZEHNTAGE_MODEL=gemini-2.5-flash`).
+(e.g. `ZEHNTAGE_MODEL=gemini-2.5-flash`).
 
 The entire plugin is a single file: lua/zehntage.lua <lua/zehntage.lua>.
 
