@@ -69,7 +69,7 @@ while True:
     req = json.loads(line)
     for _ in range(2):
         try:
-            conn.request("POST", req["p"], req["d"], req["h"])
+            conn.request("POST", req["p"], req["d"].encode("utf-8"), req["h"])
             resp = conn.getresponse()
             print(json.dumps(json.loads(resp.read())), flush=True)
             break
