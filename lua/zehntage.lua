@@ -116,12 +116,12 @@ end
 local function call_gemini(word, context, callback)
   local prompt = string.format(
     'Translate the word "%s" to English using context below. '
-      .. "Notes: max 15 words. Only something that helps memorize '%s': etymology, word roots, word structure, or a fun fact about it"
+      .. "Notes: max 15-20 words. Only something that helps memorize '%s': etymology, word structure, well-known related word, or a fun fact about it, like a mnemonic for an Anki card"
       .. "Examples:\n"
-      .. '- プロローグ -> prologue, notes: purorogu - katakana anglicism\n'
-      .. '- Schmetterling -> butterfly, notes: "From Schmetten (cream) — butterflies were thought to steal milk"\n'
-      .. '- Zeitgeist -> spirit of the time"\n'
-      .. 'Return ONLY valid JSON: {"translation":"...","notes":"..."}, Use the following context, from which the word was taken:\n\n%s',
+      .. '- Schmetterling -> {"translation": "butterfly", "notes": "From Schmetten (cream) — butterflies were thought to steal milk"}\n'
+      .. '- プロローグ -> {"translation": "prologue", "notes": "Direct loanword from english (purorogu)"}\n'
+      .. '- Zeitgeist -> {"translation: "spirit of the time"}\n'
+      .. 'Return ONLY valid JSON in this format. Use the following context, from which the word was taken:\n\n%s',
     word,
     word,
     context
