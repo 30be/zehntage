@@ -77,7 +77,9 @@ local function call_gemini_api(prompt, callback)
     "x-goog-api-key: " .. api_key,
     "-d",
     body,
-    "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent",
+    "https://generativelanguage.googleapis.com/v1beta/models/"
+      .. (vim.env.ZEHNTAGE_MODEL or "gemini-3.1-flash-lite-preview")
+      .. ":generateContent",
   }, {}, function(result)
     vim.schedule(function()
       local function show_error(msg)
