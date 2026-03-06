@@ -59,7 +59,10 @@ local set_float_content
 local proxy_script = [[
 import sys, json, http.client
 conn = http.client.HTTPSConnection("generativelanguage.googleapis.com")
-for line in sys.stdin:
+while True:
+    line = sys.stdin.readline()
+    if not line:
+        break
     line = line.strip()
     if not line:
         continue
@@ -72,6 +75,8 @@ for line in sys.stdin:
             break
         except Exception:
             conn = http.client.HTTPSConnection("generativelanguage.googleapis.com")
+    else:
+        print('{"error":{"message":"connection failed"}}', flush=True)
 ]]
 
 local proxy_job = nil
