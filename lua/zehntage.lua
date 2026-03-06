@@ -102,27 +102,22 @@ local function call_gemini_api(prompt, callback)
         show_error("Unexpected Gemini response:\n" .. (result.stdout or ""))
         return
       end
-      text = text:gsub("^```json%s*", ""):gsub("```%s*$", ""):match("^%s*(.-)%s*$")
-      local ok2, data = pcall(vim.json.decode, text)
-      if ok2 then
-        callback(data)
-      else
-        show_error("Gemini returned invalid JSON:\n" .. text)
-      end
+      text = text:match("^%s*(.-)%s*$")
+      callback(text)
     end)
   end)
 end
 
 local function call_gemini(word, context, callback)
   local prompt = string.format(
-    'Translate the word "%s" to English using context below. '
-      .. "Notes: max 15-20 words. Only something that helps memorize '%s': etymology, word structure, well-known related word, or a fun fact about it, like a mnemonic for an Anki card"
+    'Translate "%s" to English. Add a short note (max 15-20 words) to help memorize it: etymology, structure, related word, or mnemonic.\n'
+      .. "Format: 'translation: note' (without quotes)\n"
       .. "Examples:\n"
-      .. '- Schmetterling -> {"translation": "butterfly", "notes": "From Schmetten (cream) — butterflies were thought to steal milk"}\n'
-      .. '- プロローグ -> {"translation": "prologue", "notes": "Direct loanword from english (purorogu)"}\n'
-      .. '- Zeitgeist -> {"translation: "spirit of the time"}\n'
-      .. 'Return ONLY valid JSON in this format. Use the following context, from which the word was taken:\n\n%s',
-    word,
+      .. "- Schmetterling -> 'butterfly: From Schmetten (cream) — butterflies were thought to steal milk'\n"
+      .. "- プロローグ -> 'prologue: Direct loanword from english (purorogu)'\n"
+      .. "- 憧れ -> 'longing: a heart (忄) in a childlike (童) state — reaching toward something desired'\n"
+      .. "- Zeitgeist -> 'spirit of time'\n"
+      .. "Context:\n\n%s",
     word,
     context
   )
@@ -282,9 +277,12 @@ local function zehntage()
   -- Show float instantly with loading placeholder
   open_float(word)
 
-  call_gemini(word, context, function(data)
-    local translation = data.translation or ""
-    local notes = data.notes or ""
+  call_gemini(word, context, function(text)
+    local translation, notes = text:match("^(.-): (.+)$")
+    if not translation then
+      translation = text
+      notes = ""
+    end
     words[word] = { back = translation, context = context, notes = notes }
     save_words()
     highlight_buffer(0)
@@ -345,14 +343,11 @@ local function zehntage_translate()
   open_float({ "Loading..." })
 
   local prompt = string.format(
-    "You are a translator. Your ONLY job is to translate the exact text between the delimiters below to English. "
-      .. 'Return ONLY valid JSON: {"translation":"..."}\n\n'
-      .. "===BEGIN===\n%s\n===END===",
+    "Translate to English. Return ONLY the translation.\n\n%s",
     text
   )
-  call_gemini_api(prompt, function(data)
-    local translation = data.translation or ""
-    set_float_content({ translation })
+  call_gemini_api(prompt, function(translation)
+    set_float_content(vim.split(translation, "\n"))
   end)
 end
 
