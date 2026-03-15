@@ -22,7 +22,7 @@ LazyVim(recommended):
 ```
 
 Set the `GEMINI_API_KEY` environment variable and you're good to go.
-It uses Gemini 2.5 Flash Lite by default — fast enough to feel instant, smart enough for the task, and essentially free.
+It uses Gemini 3.1 Flash Lite by default — fast enough to feel instant, smart enough for the task, and essentially free.
 
 To use a different Gemini model, set the `ZEHNTAGE_MODEL` environment variable (e.g. `ZEHNTAGE_MODEL=gemini-2.5-flash`).
 
