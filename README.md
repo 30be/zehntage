@@ -1,6 +1,6 @@
 # ZehnTage
 
-Only ten days to learn German vocab? ZehnTage ("ten days" in German) is a Neovim plugin that shows word definitions with etymology and usage notes to aid memorization, and automatically exports them as TSV for Anki.
+Only ten days to learn German vocab? ZehnTage ("ten days" in German) is a Neovim plugin that shows word definitions with memorization notes, and automatically pushes them to Anki via the anki-mcp server.
 
 ![Screenshot](shot.png)
 
@@ -34,6 +34,13 @@ The initial prompt is [included](PROMPT.md) (Claude Opus 4.6).
 
 Select text in visual mode and run `:'<,'>ZehnTageTranslate` (or press `K` in visual mode with the config above) to translate without memorizing the word or creating an Anki card.
 
-## Anki export
+## Anki sync
 
-In Anki, click "Import File" and select `~/.local/share/nvim/zehntage_words.tsv`. Make sure to use a compatible card type.
+Learned words live on a remote `anki-mcp` server, which is the source of truth for the word list. On startup the plugin fetches the list from the server; every `:ZehnTage` pushes a new card automatically, and `:ZehnTageClear` removes it.
+
+Set two environment variables:
+
+- `ZEHNTAGE_ANKI_URL` — base URL of the anki-mcp server (a trailing `/mcp` is stripped automatically).
+- `ZEHNTAGE_ANKI_KEY` — the secret key, sent as the `X-Zehntage-Key` header.
+
+If either variable is unset, the plugin still translates words normally — it just skips the server calls and notes this in the popup.

@@ -1,6 +1,5 @@
 local M = {}
 
-local tsv_path = vim.fn.stdpath("data") .. "/zehntage_words.tsv"
 local notes_path = vim.fn.stdpath("data") .. "/zehntage_notes.tsv"
 local ns = vim.api.nvim_create_namespace("zehntage")
 local words = {}
@@ -9,50 +8,79 @@ local float_buf = nil
 
 vim.api.nvim_set_hl(0, "ZehnTageWord", { underline = true, fg = "#89b4fa" })
 
--- Storage -------------------------------------------------------------------
-
-local function load_words()
-  words = {}
-  local f = io.open(tsv_path, "r")
-  if not f then
-    return
-  end
-  local first = true
-  for line in f:lines() do
-    if first then
-      first = false
-    else
-      local front, back, notes, context = line:match("^(.-)|(.-)|(.-)|(.*)$")
-      if front then
-        words[front:lower()] = { back = back, context = context, notes = notes }
-      end
-    end
-  end
-  f:close()
-end
-
-local function save_words()
-  local f = io.open(tsv_path, "w")
-  if not f then
-    return
-  end
-  f:write("front|back|notes|context\n")
-  for front, data in pairs(words) do
-    local ctx = data.context:gsub("\n", " ")
-    -- Bold the learned word in context (case-insensitive)
-    local pattern = "(%f[%w])("
-      .. front:gsub("%a", function(c)
-        return "[" .. c:upper() .. c:lower() .. "]"
-      end)
-      .. ")(%f[%W])"
-    ctx = ctx:gsub(pattern, "%1<b>%2</b>%3")
-    local notes = (data.notes or ""):gsub("\n", " ")
-    f:write(front .. "|" .. data.back .. "|" .. notes .. "|" .. ctx .. "\n")
-  end
-  f:close()
-end
-
 local set_float_content
+
+-- Anki MCP server -----------------------------------------------------------
+
+-- Returns base URL (without trailing /mcp or /) and key, or nil if unset.
+local function anki_config()
+  local url = vim.env.ZEHNTAGE_ANKI_URL
+  local key = vim.env.ZEHNTAGE_ANKI_KEY
+  if not url or url == "" or not key or key == "" then
+    return nil
+  end
+  url = url:gsub("/mcp/?$", ""):gsub("/+$", "")
+  return url, key
+end
+
+-- Async HTTP request to the Anki server via curl.
+-- method: "GET" or "POST"; path: e.g. "/zehntage/list"; body: table or nil.
+-- callback receives (decoded_json, err_string). Both nil-safe.
+local function anki_request(method, path, body, callback)
+  local base, key = anki_config()
+  if not base then
+    if callback then
+      callback(nil, "ZEHNTAGE_ANKI_URL/KEY not set")
+    end
+    return
+  end
+
+  local args = {
+    "curl",
+    "-s",
+    "-X",
+    method,
+    "-H",
+    "X-Zehntage-Key: " .. key,
+    base .. path,
+  }
+  if body ~= nil then
+    table.insert(args, "-H")
+    table.insert(args, "Content-Type: application/json")
+    table.insert(args, "-d")
+    table.insert(args, vim.json.encode(body))
+  end
+
+  local out = {}
+  vim.fn.jobstart(args, {
+    stdout_buffered = true,
+    on_stdout = function(_, data)
+      if data then
+        for _, l in ipairs(data) do
+          out[#out + 1] = l
+        end
+      end
+    end,
+    on_exit = function(_, code)
+      if not callback then
+        return
+      end
+      local text = table.concat(out, "\n")
+      vim.schedule(function()
+        if code ~= 0 then
+          callback(nil, "Anki server unreachable")
+          return
+        end
+        local ok, decoded = pcall(vim.json.decode, text)
+        if not ok then
+          callback(nil, "Anki server: bad response")
+          return
+        end
+        callback(decoded, nil)
+      end)
+    end,
+  })
+end
 
 -- Gemini API (persistent connection) ----------------------------------------
 
@@ -167,13 +195,21 @@ local function call_gemini(word, context, callback)
   local prompt = string.format(
     'Translate "%s" to Russian (or to English if the word is already Russian). '
       .. "Expand abbreviations using the context. "
-      .. "Add a short note (max 20 words) to aid memorization: etymology, structure, mnemonic, or English/cross-language cognate. "
+      .. "The learner is a native Russian speaker, fluent in English, learning German.\n"
+      .. "Add a short memorization note (max ~20 words) that hooks the word to "
+      .. "something the learner ALREADY knows. Prefer, in order: "
+      .. "(1) a recognizable cognate in English or another language the learner knows, "
+      .. "phrased as a connection, e.g. \"like English 'absolve' — to finish/be done with\"; "
+      .. "(2) a sound-alike or vivid mnemonic; (3) a concrete image. "
+      .. "Do NOT give bare etymology in languages the learner doesn't know "
+      .. "(Latin, Greek, Proto-Germanic) UNLESS it immediately yields a familiar modern word. "
+      .. "If there is no genuinely memorable hook, return an EMPTY note rather than filler. "
       .. "For Japanese, add pronunciation in brackets.\n"
-      .. "Format: 'translation: note' (without quotes)\n"
-      .. "Examples (Schmetterling, eloquent, プロローグ, Zeitgeist):\n"
-      .. "'бабочка: from Schmetten (cream) — butterflies were thought to steal milk'\n"
-      .. "'красноречивый: Latin eloqui \"speak out\"; cf. eloquence'\n"
-      .. "'пролог (purorogu): English loanword'\n"
+      .. "Format: 'translation: note' (without quotes; omit ': note' if the note is empty)\n"
+      .. "Examples (vollenden, eloquent, プロローグ, Zeitgeist):\n"
+      .. "'завершить: like English 'fulfill' — voll (full) + enden (to end), to bring fully to an end'\n"
+      .. "'красноречивый: like English 'eloquent' — same word, speaking well'\n"
+      .. "'пролог (purorogu): English loanword 'prologue''\n"
       .. "'дух времени'\n"
       .. "Context:\n\n%s",
     word,
@@ -342,7 +378,6 @@ local function zehntage()
       notes = ""
     end
     words[word] = { back = translation, context = context, notes = notes }
-    save_words()
     highlight_buffer(0)
 
     -- Update float in-place if still open
@@ -352,6 +387,28 @@ local function zehntage()
       table.insert(lines, notes)
     end
     set_float_content(lines)
+
+    -- Push the card to the Anki server (auto-push)
+    if anki_config() then
+      anki_request(
+        "POST",
+        "/zehntage/add",
+        { front = word, back = translation, notes = notes, context = context },
+        function(_, err)
+          if err then
+            local l = vim.deepcopy(lines)
+            table.insert(l, "")
+            table.insert(l, "(Anki: " .. err .. ")")
+            set_float_content(l)
+          end
+        end
+      )
+    else
+      local l = vim.deepcopy(lines)
+      table.insert(l, "")
+      table.insert(l, "(Anki: ZEHNTAGE_ANKI_URL/KEY not set)")
+      set_float_content(l)
+    end
   end)
 end
 
@@ -359,8 +416,12 @@ local function zehntage_clear()
   local word = vim.fn.expand("<cword>"):lower()
   if words[word] then
     words[word] = nil
-    save_words()
     highlight_buffer(0)
+    anki_request("POST", "/zehntage/delete", { front = word }, function(_, err)
+      if err then
+        vim.notify("ZehnTage: Anki delete failed: " .. err, vim.log.levels.WARN)
+      end
+    end)
   end
 end
 
@@ -431,7 +492,27 @@ end
 -- Setup ---------------------------------------------------------------------
 
 M.setup = function()
-  load_words()
+  -- Source of truth for learned words is the Anki MCP server.
+  if anki_config() then
+    anki_request("GET", "/zehntage/list", nil, function(list, err)
+      if err or type(list) ~= "table" then
+        return
+      end
+      words = {}
+      for _, card in ipairs(list) do
+        if type(card) == "table" and card.front then
+          words[tostring(card.front):lower()] = {
+            back = card.back,
+            notes = card.notes,
+            context = card.context,
+          }
+        end
+      end
+      for _, win in ipairs(vim.api.nvim_list_wins()) do
+        highlight_buffer(vim.api.nvim_win_get_buf(win))
+      end
+    end)
+  end
 
   vim.api.nvim_create_user_command("ZehnTage", zehntage, {})
   vim.api.nvim_create_user_command("ZehnTageClear", zehntage_clear, {})
