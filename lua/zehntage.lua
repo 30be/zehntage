@@ -144,7 +144,26 @@ local function ensure_proxy()
   if proxy_job <= 0 then proxy_job = nil end
 end
 
-local function call_gemini_api(prompt, callback)
+-- Gemini structured-output response schemas.
+local WORD_SCHEMA = {
+  type = "OBJECT",
+  properties = {
+    translation = { type = "STRING" },
+    notes = { type = "STRING" },
+    context = { type = "STRING" },
+  },
+  required = { "translation", "notes", "context" },
+}
+
+local TRANSLATE_SCHEMA = {
+  type = "OBJECT",
+  properties = {
+    translation = { type = "STRING" },
+  },
+  required = { "translation" },
+}
+
+local function call_gemini_api(prompt, callback, schema)
   local api_key = vim.env.GEMINI_API_KEY
   if not api_key or api_key == "" then
     set_float_content({ "GEMINI_API_KEY not set" })
@@ -158,9 +177,14 @@ local function call_gemini_api(prompt, callback)
   end
 
   local model = vim.env.ZEHNTAGE_MODEL or "gemini-3.1-flash-lite"
+  local generation_config = { temperature = 0.2 }
+  if schema ~= nil then
+    generation_config.response_mime_type = "application/json"
+    generation_config.response_schema = schema
+  end
   local body = vim.json.encode({
     contents = { { parts = { { text = prompt } } } },
-    generation_config = { temperature = 0.2 },
+    generation_config = generation_config,
   })
 
   local request = vim.json.encode({
@@ -193,29 +217,32 @@ end
 
 local function call_gemini(word, context, callback)
   local prompt = string.format(
-    'Translate "%s" to Russian (or to English if the word is already Russian). '
-      .. "Expand abbreviations using the context. "
-      .. "The learner is a native Russian speaker, fluent in English, learning German.\n"
-      .. "Add a short memorization note (max ~20 words) that hooks the word to "
-      .. "something the learner ALREADY knows. Prefer, in order: "
-      .. "(1) a recognizable cognate in English or another language the learner knows, "
-      .. "phrased as a connection, e.g. \"like English 'absolve' — to finish/be done with\"; "
-      .. "(2) a sound-alike or vivid mnemonic; (3) a concrete image. "
-      .. "Do NOT give bare etymology in languages the learner doesn't know "
-      .. "(Latin, Greek, Proto-Germanic) UNLESS it immediately yields a familiar modern word. "
-      .. "If there is no genuinely memorable hook, return an EMPTY note rather than filler. "
-      .. "For Japanese, add pronunciation in brackets.\n"
-      .. "Format: 'translation: note' (without quotes; omit ': note' if the note is empty)\n"
-      .. "Examples (vollenden, eloquent, プロローグ, Zeitgeist):\n"
-      .. "'завершить: like English 'fulfill' — voll (full) + enden (to end), to bring fully to an end'\n"
-      .. "'красноречивый: like English 'eloquent' — same word, speaking well'\n"
-      .. "'пролог (purorogu): English loanword 'prologue''\n"
-      .. "'дух времени'\n"
-      .. "Context:\n\n%s",
+    'The learner is a native Russian speaker, fluent in English, learning German. They are studying the word "%s", which appeared in the text below.\n'
+      .. "\n"
+      .. "Provide three fields:\n"
+      .. '- translation: "%s" translated into Russian — or into English if the word is itself Russian. Expand abbreviations using the text. For Japanese words, append the pronunciation in brackets.\n'
+      .. "- notes: a short explanation, max ~25 words, that makes the word stick. When the translation alone loses nuance, say what the word actually means; always add a memory hook — a compound breakdown, a genuine cognate the learner already knows, a sound-alike, or a vivid image. Never leave this empty.\n"
+      .. "- context: the single sentence from the text below that best shows the word in use, trimmed to just that sentence, with the studied word wrapped in <b></b>. If the text below has no usable sentence, invent a short natural one.\n"
+      .. "\n"
+      .. "Examples (word → translation: notes):\n"
+      .. "- vollenden → завершить: voll ('full') + enden ('to end') — to bring something fully to its end.\n"
+      .. "- Feierabend → конец рабочего дня: Feier ('celebration') + Abend ('evening') — not just quitting time, but the relaxed free evening after work.\n"
+      .. "- Wetter → погода: the English cognate 'weather' — literally the same word.\n"
+      .. "\n"
+      .. "Text:\n"
+      .. "%s",
+    word,
     word,
     context
   )
-  call_gemini_api(prompt, callback)
+  call_gemini_api(prompt, function(text)
+    local ok, decoded = pcall(vim.json.decode, text)
+    if not ok or type(decoded) ~= "table" then
+      callback(text, "", "")
+      return
+    end
+    callback(decoded.translation or "", decoded.notes or "", decoded.context or "")
+  end, WORD_SCHEMA)
 end
 
 -- Floating window -----------------------------------------------------------
@@ -371,13 +398,8 @@ local function zehntage()
   -- Show float instantly with loading placeholder
   open_float(word)
 
-  call_gemini(word, context, function(text)
-    local translation, notes = text:match("^(.-): (.+)$")
-    if not translation then
-      translation = text
-      notes = ""
-    end
-    words[word] = { back = translation, context = context, notes = notes }
+  call_gemini(word, context, function(translation, notes, model_context)
+    words[word] = { back = translation, notes = notes, context = model_context }
     highlight_buffer(0)
 
     -- Update float in-place if still open
@@ -393,7 +415,7 @@ local function zehntage()
       anki_request(
         "POST",
         "/zehntage/add",
-        { front = word, back = translation, notes = notes, context = context },
+        { front = word, back = translation, notes = notes, context = model_context },
         function(_, err)
           if err then
             local l = vim.deepcopy(lines)
@@ -462,13 +484,23 @@ local function zehntage_translate()
   open_float({ "Loading..." })
 
   local prompt = string.format(
-    "Translate the text below to Russian (or to English if it is already Russian). "
-      .. "Expand abbreviations using context. Return ONLY the translation.\n\n%s",
+    "Translate the text between the === markers into Russian — or into English if it is already Russian. Expand abbreviations using the surrounding words. Translate only that text, nothing else.\n"
+      .. "\n"
+      .. "===\n"
+      .. "%s\n"
+      .. "===",
     text
   )
-  call_gemini_api(prompt, function(translation)
+  call_gemini_api(prompt, function(response_text)
+    local ok, decoded = pcall(vim.json.decode, response_text)
+    local translation
+    if ok and type(decoded) == "table" and decoded.translation then
+      translation = decoded.translation
+    else
+      translation = response_text
+    end
     set_float_content(vim.split(translation, "\n"))
-  end)
+  end, TRANSLATE_SCHEMA)
 end
 
 local function zehntage_note(opts)
