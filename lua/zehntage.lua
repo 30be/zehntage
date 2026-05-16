@@ -129,7 +129,7 @@ local function call_gemini_api(prompt, callback)
     return
   end
 
-  local model = vim.env.ZEHNTAGE_MODEL or "gemini-3.1-flash-lite-preview"
+  local model = vim.env.ZEHNTAGE_MODEL or "gemini-3.1-flash-lite"
   local body = vim.json.encode({
     contents = { { parts = { { text = prompt } } } },
     generation_config = { temperature = 0.2 },
@@ -165,13 +165,16 @@ end
 
 local function call_gemini(word, context, callback)
   local prompt = string.format(
-    'Translate "%s" to English. Add a short note (max 15-20 words) to help memorize it: etymology, structure, related word, or mnemonic. For japanese, add pronunciation in brackets\n'
+    'Translate "%s" to Russian (or to English if the word is already Russian). '
+      .. "Expand abbreviations using the context. "
+      .. "Add a short note (max 20 words) to aid memorization: etymology, structure, mnemonic, or English/cross-language cognate. "
+      .. "For Japanese, add pronunciation in brackets.\n"
       .. "Format: 'translation: note' (without quotes)\n"
-      .. "Example outputs for Schmetterling, プロローグ, 憧れ, Zeitgeist:\n"
-      .. "'butterfly: From Schmetten (cream) — butterflies were thought to steal milk'\n"
-      .. "'prologue (purorog): Direct loanword from english'\n"
-      .. "'longing (akogare): a heart (忄) in a childlike (童) state — reaching toward something desired'\n"
-      .. "'spirit of time'\n"
+      .. "Examples (Schmetterling, eloquent, プロローグ, Zeitgeist):\n"
+      .. "'бабочка: from Schmetten (cream) — butterflies were thought to steal milk'\n"
+      .. "'красноречивый: Latin eloqui \"speak out\"; cf. eloquence'\n"
+      .. "'пролог (purorogu): English loanword'\n"
+      .. "'дух времени'\n"
       .. "Context:\n\n%s",
     word,
     context
@@ -398,7 +401,8 @@ local function zehntage_translate()
   open_float({ "Loading..." })
 
   local prompt = string.format(
-    "Translate to English. Return ONLY the translation.\n\n%s",
+    "Translate the text below to Russian (or to English if it is already Russian). "
+      .. "Expand abbreviations using context. Return ONLY the translation.\n\n%s",
     text
   )
   call_gemini_api(prompt, function(translation)
