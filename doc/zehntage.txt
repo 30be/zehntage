@@ -63,8 +63,7 @@ it.
 
 Set two environment variables:
 
-- `ZEHNTAGE_ANKI_URL` — base URL of the anki-mcp server (a trailing `/mcp` is
-  stripped automatically).
+- `ZEHNTAGE_ANKI_URL` — base URL of the anki-mcp server (a trailing `/mcp` is stripped automatically).
 - `ZEHNTAGE_ANKI_KEY` — the secret key, sent as the `X-Zehntage-Key` header.
 
 If either variable is unset, the plugin still translates words normally — it
