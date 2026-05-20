@@ -176,7 +176,7 @@ local function call_gemini_api(prompt, callback, schema)
     return
   end
 
-  local model = vim.env.ZEHNTAGE_MODEL or "gemini-3.5-flash"
+  local model = vim.env.ZEHNTAGE_MODEL or "gemini-3.1-flash-lite"
   local generation_config = { temperature = 0.2 }
   if schema ~= nil then
     generation_config.response_mime_type = "application/json"
