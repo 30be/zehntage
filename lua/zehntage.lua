@@ -176,7 +176,7 @@ local function call_gemini_api(prompt, callback, schema)
     return
   end
 
-  local model = vim.env.ZEHNTAGE_MODEL or "gemini-3.1-flash-lite"
+  local model = vim.env.ZEHNTAGE_MODEL or "gemini-3.5-flash"
   local generation_config = { temperature = 0.2 }
   if schema ~= nil then
     generation_config.response_mime_type = "application/json"
@@ -483,14 +483,27 @@ local function zehntage_translate()
 
   open_float({ "Loading..." })
 
-  local prompt = string.format(
-    "Translate the text between the === markers into Russian — or into English if it is already Russian. Expand abbreviations using the surrounding words. Translate only that text, nothing else.\n"
-      .. "\n"
-      .. "===\n"
-      .. "%s\n"
-      .. "===",
-    text
-  )
+  local word_count = select(2, text:gsub("%S+", "%0"))
+  local prompt
+  if word_count > 100 then
+    prompt = string.format(
+      "Summarize the text between the === markers in Russian — or in English if the text is itself in Russian. Keep the summary concise (a few sentences, max ~60 words). Summarize only that text, nothing else.\n"
+        .. "\n"
+        .. "===\n"
+        .. "%s\n"
+        .. "===",
+      text
+    )
+  else
+    prompt = string.format(
+      "Translate the text between the === markers into Russian — or into English if it is already Russian. Expand abbreviations using the surrounding words. Translate only that text, nothing else.\n"
+        .. "\n"
+        .. "===\n"
+        .. "%s\n"
+        .. "===",
+      text
+    )
+  end
   call_gemini_api(prompt, function(response_text)
     local ok, decoded = pcall(vim.json.decode, response_text)
     local translation
