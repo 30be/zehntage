@@ -148,11 +148,12 @@ end
 local WORD_SCHEMA = {
   type = "OBJECT",
   properties = {
+    article = { type = "STRING" },
     translation = { type = "STRING" },
     notes = { type = "STRING" },
     context = { type = "STRING" },
   },
-  required = { "translation", "notes", "context" },
+  required = { "article", "translation", "notes", "context" },
 }
 
 local TRANSLATE_SCHEMA = {
@@ -219,18 +220,20 @@ local function call_gemini(word, context, callback)
   local prompt = string.format(
     'The learner is a native Russian speaker, fluent in English, learning German. They are studying the word "%s", which appeared in the text below.\n'
       .. "\n"
-      .. "Provide three fields:\n"
+      .. "Provide four fields:\n"
+      .. '- article: if "%s" is a German common noun, return its definite article ("der", "die", or "das"). Otherwise (verbs, adjectives, English/Russian words, anything that is not a noun) return an empty string.\n'
       .. '- translation: "%s" translated into Russian — or into English if the word is itself Russian. Expand abbreviations using the text. For Japanese words, append the pronunciation in brackets.\n'
       .. "- notes: a short explanation, max ~25 words, that makes the word stick. When the translation alone loses nuance, say what the word actually means; always add a memory hook — a compound breakdown, a genuine cognate the learner already knows, a sound-alike, or a vivid image. Never leave this empty.\n"
       .. "- context: the single sentence from the text below that best shows the word in use, trimmed to just that sentence, with the studied word wrapped in <b></b>. If the text below has no usable sentence, invent a short natural one.\n"
       .. "\n"
-      .. "Examples (word → translation: notes):\n"
-      .. "- vollenden → завершить: voll ('full') + enden ('to end') — to bring something fully to its end.\n"
-      .. "- Feierabend → конец рабочего дня: Feier ('celebration') + Abend ('evening') — not just quitting time, but the relaxed free evening after work.\n"
-      .. "- Wetter → погода: the English cognate 'weather' — literally the same word.\n"
+      .. "Examples:\n"
+      .. '- "vollenden" → article: "", translation: "завершить", notes: "voll (\'full\') + enden (\'to end\') — to bring something fully to its end."\n'
+      .. '- "Handschuh" → article: "der", translation: "перчатка", notes: "Hand + Schuh (\'shoe\') — literally a \'shoe for the hand\'."\n'
+      .. '- "Wetter" → article: "das", translation: "погода", notes: "the English cognate \'weather\' — literally the same word."\n'
       .. "\n"
       .. "Text:\n"
       .. "%s",
+    word,
     word,
     word,
     context
@@ -238,10 +241,15 @@ local function call_gemini(word, context, callback)
   call_gemini_api(prompt, function(text)
     local ok, decoded = pcall(vim.json.decode, text)
     if not ok or type(decoded) ~= "table" then
-      callback(text, "", "")
+      callback(text, "", "", "")
       return
     end
-    callback(decoded.translation or "", decoded.notes or "", decoded.context or "")
+    callback(
+      decoded.translation or "",
+      decoded.notes or "",
+      decoded.context or "",
+      decoded.article or ""
+    )
   end, WORD_SCHEMA)
 end
 
@@ -378,13 +386,14 @@ end
 -- Commands ------------------------------------------------------------------
 
 local function zehntage()
-  local word = vim.fn.expand("<cword>"):lower()
+  local word_raw = vim.fn.expand("<cword>")
+  local word = word_raw:lower()
   if word == "" then
     return
   end
 
   if words[word] then
-    open_float(word, words[word].back, words[word].notes)
+    open_float(words[word].front_full or word_raw, words[word].back, words[word].notes)
     return
   end
 
@@ -396,14 +405,22 @@ local function zehntage()
   local context = table.concat(context_lines, "\n")
 
   -- Show float instantly with loading placeholder
-  open_float(word)
+  open_float(word_raw)
 
-  call_gemini(word, context, function(translation, notes, model_context)
-    words[word] = { back = translation, notes = notes, context = model_context }
+  call_gemini(word_raw, context, function(translation, notes, model_context, article)
+    article = article or ""
+    local front_full = (article ~= "") and (article .. " " .. word_raw) or word_raw
+    words[word] = {
+      back = translation,
+      notes = notes,
+      context = model_context,
+      article = article,
+      front_full = front_full,
+    }
     highlight_buffer(0)
 
     -- Update float in-place if still open
-    local lines = { word .. " → " .. translation }
+    local lines = { front_full .. " → " .. translation }
     if notes ~= "" then
       table.insert(lines, "")
       table.insert(lines, notes)
@@ -415,7 +432,7 @@ local function zehntage()
       anki_request(
         "POST",
         "/zehntage/add",
-        { front = word, back = translation, notes = notes, context = model_context },
+        { front = front_full, back = translation, notes = notes, context = model_context },
         function(_, err)
           if err then
             local l = vim.deepcopy(lines)
@@ -437,9 +454,10 @@ end
 local function zehntage_clear()
   local word = vim.fn.expand("<cword>"):lower()
   if words[word] then
+    local front_to_delete = words[word].front_full or word
     words[word] = nil
     highlight_buffer(0)
-    anki_request("POST", "/zehntage/delete", { front = word }, function(_, err)
+    anki_request("POST", "/zehntage/delete", { front = front_to_delete }, function(_, err)
       if err then
         vim.notify("ZehnTage: Anki delete failed: " .. err, vim.log.levels.WARN)
       end
@@ -546,10 +564,21 @@ M.setup = function()
       words = {}
       for _, card in ipairs(list) do
         if type(card) == "table" and card.front then
-          words[tostring(card.front):lower()] = {
+          local front = tostring(card.front)
+          local article, bare = "", front
+          for _, art in ipairs({ "der", "die", "das" }) do
+            local rest = front:match("^" .. art .. "%s+(.+)$")
+            if rest then
+              article, bare = art, rest
+              break
+            end
+          end
+          words[bare:lower()] = {
             back = card.back,
             notes = card.notes,
             context = card.context,
+            article = article,
+            front_full = front,
           }
         end
       end
