@@ -164,6 +164,15 @@ local TRANSLATE_SCHEMA = {
   required = { "translation" },
 }
 
+local REF_SCHEMA = {
+  type = "OBJECT",
+  properties = {
+    translation = { type = "STRING" },
+    notes = { type = "STRING" },
+  },
+  required = { "translation", "notes" },
+}
+
 local function call_gemini_api(prompt, callback, schema)
   local api_key = vim.env.GEMINI_API_KEY
   if not api_key or api_key == "" then
@@ -223,7 +232,7 @@ local function call_gemini(word, context, callback)
       .. "Provide four fields:\n"
       .. '- article: if "%s" is a German common noun, return its definite article ("der", "die", or "das"). Otherwise (verbs, adjectives, English/Russian words, anything that is not a noun) return an empty string.\n'
       .. '- translation: "%s" translated into Russian — or into English if the word is itself Russian. Expand abbreviations using the text. For Japanese words, append the pronunciation in brackets.\n'
-      .. "- notes: a short explanation, max ~25 words, that makes the word stick. When the translation alone loses nuance, say what the word actually means; always add a memory hook — a compound breakdown, a genuine cognate the learner already knows, a sound-alike, or a vivid image. Never leave this empty.\n"
+      .. "- notes: If the studied word is a proper noun naming a real person, place, work, or brand, give a one-sentence encyclopedic abstract — who or what it is and what it is best known for (max ~30 words). Otherwise a short explanation (max ~25 words) that makes the word stick: when the translation loses nuance say what it actually means, and add a memory hook — a compound breakdown, a genuine cognate the learner already knows, a sound-alike, or a vivid image. Never leave this empty.\n"
       .. "- context: the single sentence from the text below that best shows the word in use, trimmed to just that sentence, with the studied word wrapped in <b></b>. If the text below has no usable sentence, invent a short natural one.\n"
       .. "\n"
       .. "Examples:\n"
@@ -244,11 +253,15 @@ local function call_gemini(word, context, callback)
       callback(text, "", "", "")
       return
     end
+    local article = decoded.article or ""
+    if article ~= "der" and article ~= "die" and article ~= "das" then
+      article = ""
+    end
     callback(
       decoded.translation or "",
       decoded.notes or "",
       decoded.context or "",
-      decoded.article or ""
+      article
     )
   end, WORD_SCHEMA)
 end
@@ -502,9 +515,8 @@ local function zehntage_translate()
   open_float({ "Loading..." })
 
   local word_count = select(2, text:gsub("%S+", "%0"))
-  local prompt
   if word_count > 100 then
-    prompt = string.format(
+    local prompt = string.format(
       "Summarize the text between the === markers in Russian — or in English if the text is itself in Russian. Keep the summary concise (a few sentences, max ~60 words). Summarize only that text, nothing else.\n"
         .. "\n"
         .. "===\n"
@@ -512,26 +524,67 @@ local function zehntage_translate()
         .. "===",
       text
     )
-  else
-    prompt = string.format(
-      "Translate the text between the === markers into Russian — or into English if it is already Russian. Expand abbreviations using the surrounding words. Translate only that text, nothing else.\n"
-        .. "\n"
-        .. "===\n"
-        .. "%s\n"
-        .. "===",
-      text
-    )
+    call_gemini_api(prompt, function(response_text)
+      local ok, decoded = pcall(vim.json.decode, response_text)
+      local translation
+      if ok and type(decoded) == "table" and decoded.translation then
+        translation = decoded.translation
+      else
+        translation = response_text
+      end
+      set_float_content(vim.split(translation, "\n"))
+    end, TRANSLATE_SCHEMA)
+    return
   end
+
+  -- Gather surrounding context: the selected lines plus one above and one below.
+  local sr = vim.fn.getpos("'<")[2]
+  local er = vim.fn.getpos("'>")[2]
+  if er < sr then
+    sr, er = er, sr
+  end
+  local line_count = vim.api.nvim_buf_line_count(0)
+  local start = math.max(0, sr - 2)
+  local finish = math.min(line_count, er + 1)
+  local context_lines = vim.api.nvim_buf_get_lines(0, start, finish, false)
+  local context = table.concat(context_lines, "\n")
+
+  local prompt = string.format(
+    "The reader is a native Russian speaker, fluent in English. Translate and explain the text between the === markers, which they selected while reading the context below.\n"
+      .. "\n"
+      .. "Provide two fields:\n"
+      .. "- translation: the selected text translated into Russian — or into English if it is itself Russian. Expand abbreviations using the context. Translate only the text between the markers.\n"
+      .. "- notes: a short note (max ~50 words, in the same language as the selected text) that helps the reader truly understand it. If it contains or alludes to a literary, biblical, historical, or cultural reference, a named work or person, a joke, an allusion, an idiom, or a double meaning — explain what it refers to and, if it is used ironically or rhetorically or as a joke, what the actual point is. If it quotes or names something famous, consider whether it is commonly misattributed or whether its modern usage differs from the original meaning, and say so. If the text is plain with no such reference, briefly clarify its meaning, nuance, or tone. Never leave notes empty.\n"
+      .. "\n"
+      .. "Selected text:\n"
+      .. "===\n"
+      .. "%s\n"
+      .. "===\n"
+      .. "\n"
+      .. "Context:\n"
+      .. "%s",
+    text,
+    context
+  )
   call_gemini_api(prompt, function(response_text)
     local ok, decoded = pcall(vim.json.decode, response_text)
-    local translation
+    local translation, notes
     if ok and type(decoded) == "table" and decoded.translation then
       translation = decoded.translation
+      notes = decoded.notes or ""
     else
       translation = response_text
+      notes = ""
     end
-    set_float_content(vim.split(translation, "\n"))
-  end, TRANSLATE_SCHEMA)
+    local lines = vim.split(translation, "\n")
+    if notes ~= "" then
+      table.insert(lines, "")
+      for _, l in ipairs(vim.split(notes, "\n")) do
+        table.insert(lines, l)
+      end
+    end
+    set_float_content(lines)
+  end, REF_SCHEMA)
 end
 
 local function zehntage_note(opts)
