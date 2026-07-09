@@ -1,5 +1,10 @@
 local M = {}
 
+M.config = {
+  provider = "cerebras", -- "gemini" | "groq" | "claude" | "cerebras"
+  model = nil, -- optional override; each provider has its own default
+}
+
 local notes_path = vim.fn.stdpath("data") .. "/zehntage_notes.tsv"
 local ns = vim.api.nvim_create_namespace("zehntage")
 local words = {}
@@ -82,11 +87,18 @@ local function anki_request(method, path, body, callback)
   })
 end
 
--- Gemini API (persistent connection) ----------------------------------------
+-- Model API (persistent connection) ------------------------------------------
 
+-- One persistent HTTPS connection per host, reused across requests to avoid
+-- paying a TLS handshake on every word lookup.
 local proxy_script = [[
 import sys, json, http.client
-conn = http.client.HTTPSConnection("generativelanguage.googleapis.com")
+conns = {}
+def get_conn(host):
+    if host not in conns:
+        conns[host] = http.client.HTTPSConnection(host)
+    return conns[host]
+
 while True:
     line = sys.stdin.readline()
     if not line:
@@ -95,15 +107,17 @@ while True:
     if not line:
         continue
     req = json.loads(line)
+    host = req["host"]
     for _ in range(2):
         try:
+            conn = get_conn(host)
             conn.request("POST", req["p"], req["d"].encode("utf-8"), req["h"])
             resp = conn.getresponse()
             print(json.dumps(json.loads(resp.read())), flush=True)
             break
         except Exception as e:
             err = str(e)
-            conn = http.client.HTTPSConnection("generativelanguage.googleapis.com")
+            conns[host] = http.client.HTTPSConnection(host)
     else:
         print(json.dumps({"error":{"message":err}}), flush=True)
 ]]
@@ -113,18 +127,24 @@ local proxy_partial = ""
 local proxy_callbacks = {}
 
 local function ensure_proxy()
-  if proxy_job then return end
+  if proxy_job then
+    return
+  end
   proxy_job = vim.fn.jobstart({ "python3", "-c", proxy_script }, {
     stdout_buffered = false,
     on_stdout = function(_, data)
-      if not data then return end
+      if not data then
+        return
+      end
       data[1] = proxy_partial .. data[1]
       proxy_partial = data[#data]
       for i = 1, #data - 1 do
         if data[i] ~= "" and #proxy_callbacks > 0 then
           local cb = table.remove(proxy_callbacks, 1)
           local line = data[i]
-          vim.schedule(function() cb(line) end)
+          vim.schedule(function()
+            cb(line)
+          end)
         end
       end
     end,
@@ -132,7 +152,9 @@ local function ensure_proxy()
       if data then
         local msg = table.concat(data, "\n"):gsub("^%s+", ""):gsub("%s+$", "")
         if msg ~= "" then
-          vim.schedule(function() set_float_content(vim.split("Proxy: " .. msg, "\n")) end)
+          vim.schedule(function()
+            set_float_content(vim.split("Proxy: " .. msg, "\n"))
+          end)
         end
       end
     end,
@@ -141,10 +163,13 @@ local function ensure_proxy()
       proxy_partial = ""
     end,
   })
-  if proxy_job <= 0 then proxy_job = nil end
+  if proxy_job <= 0 then
+    proxy_job = nil
+  end
 end
 
--- Gemini structured-output response schemas.
+-- Structured-output response schemas, authored once in Gemini's uppercase-type
+-- style; to_json_schema() converts them for OpenAI-compatible providers.
 local WORD_SCHEMA = {
   type = "OBJECT",
   properties = {
@@ -173,10 +198,197 @@ local REF_SCHEMA = {
   required = { "translation", "notes" },
 }
 
-local function call_gemini_api(prompt, callback, schema)
-  local api_key = vim.env.GEMINI_API_KEY
+-- Gemini schemas use uppercase types; Groq/Cerebras want lowercase strict
+-- JSON Schema with every property required and additionalProperties: false.
+local function to_json_schema(s)
+  if type(s) ~= "table" then
+    return s
+  end
+  local out = {}
+  if s.type then
+    out.type = string.lower(s.type)
+  end
+  if s.properties then
+    out.properties = {}
+    for k, v in pairs(s.properties) do
+      out.properties[k] = to_json_schema(v)
+    end
+    out.additionalProperties = false
+  end
+  if s.items then
+    out.items = to_json_schema(s.items)
+  end
+  if s.required then
+    out.required = s.required
+  end
+  if out.properties and not out.required then
+    local req = {}
+    for k, _ in pairs(out.properties) do
+      table.insert(req, k)
+    end
+    out.required = req
+  end
+  return out
+end
+
+-- Provider table: each entry knows its host, default model, API key env var,
+-- how to build a request for that API's shape, and how to pull the raw text
+-- back out of that API's response shape.
+local PROVIDERS = {
+  gemini = {
+    host = "generativelanguage.googleapis.com",
+    default_model = "gemini-3.1-flash-lite",
+    key_env = "GEMINI_API_KEY",
+    path = function(model)
+      return "/v1beta/models/" .. model .. ":generateContent"
+    end,
+    build = function(model, api_key, prompt, schema)
+      local generation_config = { temperature = 0.2 }
+      if schema ~= nil then
+        generation_config.response_mime_type = "application/json"
+        generation_config.response_schema = schema
+      end
+      local headers = {
+        ["Content-Type"] = "application/json",
+        ["x-goog-api-key"] = api_key,
+      }
+      local body = {
+        contents = { { parts = { { text = prompt } } } },
+        generation_config = generation_config,
+      }
+      return headers, body
+    end,
+    parse = function(resp)
+      return resp.candidates
+        and resp.candidates[1]
+        and resp.candidates[1].content
+        and resp.candidates[1].content.parts[1].text
+    end,
+  },
+  groq = {
+    host = "api.groq.com",
+    default_model = "openai/gpt-oss-120b",
+    key_env = "GROQ_API_KEY",
+    path = function(_)
+      return "/openai/v1/chat/completions"
+    end,
+    build = function(model, api_key, prompt, schema)
+      local headers = {
+        ["Content-Type"] = "application/json",
+        ["Authorization"] = "Bearer " .. api_key,
+      }
+      -- gpt-oss: 120b gets a fuller reasoning pass ("high"), 20b stays fast at
+      -- "low". Qwen3.6 uses a different value set ("default"/"none") for the
+      -- same param, so it needs "none" explicitly or it defaults to thinking
+      -- mode, which is too slow for this use case.
+      local reasoning_effort
+      if model:find("gpt-oss", 1, true) then
+        reasoning_effort = model:find("120b", 1, true) and "high" or "low"
+      else
+        reasoning_effort = "none"
+      end
+      local body = {
+        model = model,
+        temperature = 0.2,
+        reasoning_effort = reasoning_effort,
+        stream = false,
+        messages = { { role = "user", content = prompt } },
+      }
+      if schema ~= nil then
+        body.response_format = {
+          type = "json_schema",
+          json_schema = { name = "result", strict = true, schema = to_json_schema(schema) },
+        }
+      end
+      return headers, body
+    end,
+    parse = function(resp)
+      return resp.choices and resp.choices[1] and resp.choices[1].message and resp.choices[1].message.content
+    end,
+  },
+  claude = {
+    host = "api.anthropic.com",
+    default_model = "claude-sonnet-5",
+    key_env = "ANTHROPIC_API_KEY",
+    path = function(_)
+      return "/v1/messages"
+    end,
+    build = function(model, api_key, prompt, schema)
+      local headers = {
+        ["Content-Type"] = "application/json",
+        ["x-api-key"] = api_key,
+        ["anthropic-version"] = "2023-06-01",
+      }
+      local body = {
+        model = model,
+        max_tokens = 1024,
+        stream = false,
+        messages = { { role = "user", content = prompt } },
+      }
+      if schema ~= nil then
+        body.system = "Respond with only a JSON object matching this schema, no other text: "
+          .. vim.json.encode(to_json_schema(schema))
+      end
+      return headers, body
+    end,
+    -- Claude has no native structured-output param, so the schema is only a
+    -- prompt-level hint — strip a stray ```json fence before decoding.
+    parse = function(resp)
+      local block = resp.content and resp.content[1]
+      local text = block and block.text
+      if text then
+        text = text:gsub("^```json%s*", ""):gsub("```%s*$", "")
+      end
+      return text
+    end,
+  },
+  cerebras = {
+    host = "api.cerebras.ai",
+    default_model = "zai-glm-4.7",
+    key_env = "CEREBRAS_API_KEY",
+    path = function(_)
+      return "/v1/chat/completions"
+    end,
+    build = function(model, api_key, prompt, schema)
+      local headers = {
+        ["Content-Type"] = "application/json",
+        ["Authorization"] = "Bearer " .. api_key,
+      }
+      local body = {
+        model = model,
+        temperature = 0.2,
+        -- GLM 4.7 non-reasoning — no thinking pass for this quick-translation use case.
+        reasoning_effort = "none",
+        stream = false,
+        messages = { { role = "user", content = prompt } },
+      }
+      if schema ~= nil then
+        body.response_format = {
+          type = "json_schema",
+          json_schema = { name = "result", strict = true, schema = to_json_schema(schema) },
+        }
+      end
+      return headers, body
+    end,
+    parse = function(resp)
+      return resp.choices and resp.choices[1] and resp.choices[1].message and resp.choices[1].message.content
+    end,
+  },
+}
+
+-- Sends prompt to the configured provider and calls callback(text) with the
+-- raw response text once it arrives. schema, if given, requests structured
+-- output in whatever form that provider supports.
+local function call_model(prompt, callback, schema)
+  local provider = PROVIDERS[M.config.provider]
+  if not provider then
+    set_float_content({ "Unknown provider: " .. tostring(M.config.provider) })
+    return
+  end
+
+  local api_key = vim.env[provider.key_env]
   if not api_key or api_key == "" then
-    set_float_content({ "GEMINI_API_KEY not set" })
+    set_float_content({ provider.key_env .. " not set" })
     return
   end
 
@@ -186,24 +398,14 @@ local function call_gemini_api(prompt, callback, schema)
     return
   end
 
-  local model = vim.env.ZEHNTAGE_MODEL or "gemini-3.1-flash-lite"
-  local generation_config = { temperature = 0.2 }
-  if schema ~= nil then
-    generation_config.response_mime_type = "application/json"
-    generation_config.response_schema = schema
-  end
-  local body = vim.json.encode({
-    contents = { { parts = { { text = prompt } } } },
-    generation_config = generation_config,
-  })
+  local model = M.config.model or provider.default_model
+  local headers, body = provider.build(model, api_key, prompt, schema)
 
   local request = vim.json.encode({
-    p = "/v1beta/models/" .. model .. ":generateContent",
-    h = {
-      ["Content-Type"] = "application/json",
-      ["x-goog-api-key"] = api_key,
-    },
-    d = body,
+    host = provider.host,
+    p = provider.path(model),
+    h = headers,
+    d = vim.json.encode(body),
   })
 
   table.insert(proxy_callbacks, function(response_line)
@@ -212,8 +414,7 @@ local function call_gemini_api(prompt, callback, schema)
       set_float_content({ "Failed to parse response" })
       return
     end
-    local text = resp.candidates and resp.candidates[1]
-      and resp.candidates[1].content.parts[1].text
+    local text = provider.parse(resp)
     if not text then
       set_float_content(vim.split("Unexpected response:\n" .. response_line, "\n"))
       return
@@ -225,7 +426,7 @@ local function call_gemini_api(prompt, callback, schema)
   vim.fn.chansend(proxy_job, request .. "\n")
 end
 
-local function call_gemini(word, context, callback)
+local function translate_word(word, context, callback)
   local prompt = string.format(
     'The learner is a native Russian speaker, fluent in English, learning German. They are studying the word "%s", which appeared in the text below.\n'
       .. "\n"
@@ -247,7 +448,7 @@ local function call_gemini(word, context, callback)
     word,
     context
   )
-  call_gemini_api(prompt, function(text)
+  call_model(prompt, function(text)
     local ok, decoded = pcall(vim.json.decode, text)
     if not ok or type(decoded) ~= "table" then
       callback(text, "", "", "")
@@ -257,12 +458,7 @@ local function call_gemini(word, context, callback)
     if article ~= "der" and article ~= "die" and article ~= "das" then
       article = ""
     end
-    callback(
-      decoded.translation or "",
-      decoded.notes or "",
-      decoded.context or "",
-      article
-    )
+    callback(decoded.translation or "", decoded.notes or "", decoded.context or "", article)
   end, WORD_SCHEMA)
 end
 
@@ -420,7 +616,7 @@ local function zehntage()
   -- Show float instantly with loading placeholder
   open_float(word_raw)
 
-  call_gemini(word_raw, context, function(translation, notes, model_context, article)
+  translate_word(word_raw, context, function(translation, notes, model_context, article)
     article = article or ""
     local front_full = (article ~= "") and (article .. " " .. word_raw) or word_raw
     words[word] = {
@@ -524,7 +720,7 @@ local function zehntage_translate()
         .. "===",
       text
     )
-    call_gemini_api(prompt, function(response_text)
+    call_model(prompt, function(response_text)
       local ok, decoded = pcall(vim.json.decode, response_text)
       local translation
       if ok and type(decoded) == "table" and decoded.translation then
@@ -566,7 +762,7 @@ local function zehntage_translate()
     text,
     context
   )
-  call_gemini_api(prompt, function(response_text)
+  call_model(prompt, function(response_text)
     local ok, decoded = pcall(vim.json.decode, response_text)
     local translation, notes
     if ok and type(decoded) == "table" and decoded.translation then
@@ -607,7 +803,9 @@ end
 
 -- Setup ---------------------------------------------------------------------
 
-M.setup = function()
+M.setup = function(opts)
+  M.config = vim.tbl_extend("force", M.config, opts or {})
+
   -- Source of truth for learned words is the Anki MCP server.
   if anki_config() then
     anki_request("GET", "/zehntage/list", nil, function(list, err)
@@ -648,7 +846,9 @@ M.setup = function()
 
   vim.api.nvim_create_autocmd("VimLeave", {
     callback = function()
-      if proxy_job then vim.fn.jobstop(proxy_job) end
+      if proxy_job then
+        vim.fn.jobstop(proxy_job)
+      end
     end,
   })
 

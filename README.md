@@ -11,7 +11,7 @@ LazyVim(recommended):
 ```lua
 {
     "30be/zehntage",
-    opts = {}, -- no opts are available.
+    opts = {}, -- provider/model selection goes here, see below.
     ft = { "markdown", "text" },
     keys = {
         { "K", "<cmd>ZehnTage<CR>", desc = "ZehnTage add word" }, -- the same as hinting is often set up
@@ -21,10 +21,29 @@ LazyVim(recommended):
 },
 ```
 
-Set the `GEMINI_API_KEY` environment variable and you're good to go.
-It uses Gemini 3.1 Flash Lite by default — fast enough to feel instant, smart enough for the task, and essentially free.
+By default it uses **GLM 4.7 on Cerebras** — fast, cheap, and good enough for
+this task. Set the `CEREBRAS_API_KEY` environment variable and you're good to
+go.
 
-To use a different Gemini model, set the `ZEHNTAGE_MODEL` environment variable (e.g. `ZEHNTAGE_MODEL=gemini-2.5-flash`).
+## Provider / model
+
+Pick a different provider and/or model via `opts`:
+
+```lua
+opts = {
+    provider = "gemini", -- "gemini" | "groq" | "claude" | "cerebras" (default)
+    model = "gemini-2.5-flash", -- optional; each provider has its own default
+},
+```
+
+Each provider reads its key from its own environment variable:
+
+| provider | default model | env var |
+|---|---|---|
+| `gemini` | gemini-3.1-flash-lite | `GEMINI_API_KEY` |
+| `groq` | openai/gpt-oss-120b | `GROQ_API_KEY` |
+| `claude` | claude-sonnet-5 | `ANTHROPIC_API_KEY` |
+| `cerebras` | zai-glm-4.7 | `CEREBRAS_API_KEY` |
 
 The entire plugin is a single file: [lua/zehntage.lua](lua/zehntage.lua).
 
