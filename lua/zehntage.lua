@@ -1,7 +1,7 @@
 local M = {}
 
 M.config = {
-  provider = "cerebras", -- "gemini" | "groq" | "claude" | "cerebras"
+  provider = "gemini", -- "gemini" | "groq" | "claude" | "cerebras"
   model = nil, -- optional override; each provider has its own default
 }
 
@@ -237,7 +237,7 @@ end
 local PROVIDERS = {
   gemini = {
     host = "generativelanguage.googleapis.com",
-    default_model = "gemini-3.1-flash-lite",
+    default_model = "gemini-3.5-flash-lite",
     key_env = "GEMINI_API_KEY",
     path = function(model)
       return "/v1beta/models/" .. model .. ":generateContent"
