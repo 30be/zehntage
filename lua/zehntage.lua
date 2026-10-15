@@ -1,8 +1,12 @@
 local M = {}
 
 M.config = {
-  provider = "gemini", -- "gemini" | "groq" | "claude" | "cerebras"
+  provider = "claude", -- "gemini" | "groq" | "claude" | "cerebras"
   model = nil, -- optional override; each provider has its own default
+  -- Second opinion from Opus through the local Claude Code CLI (`claude -p`,
+  -- subscription auth). Prefetched on every lookup; Anki cards are built from
+  -- it. false = fast model only.
+  opus = true,
 }
 
 local notes_path = vim.fn.stdpath("data") .. "/zehntage_notes.tsv"
@@ -231,6 +235,16 @@ local function to_json_schema(s)
   return out
 end
 
+local function json_system_prompt(schema)
+  return "Respond with only a JSON object matching this schema, no other text: "
+    .. vim.json.encode(to_json_schema(schema))
+end
+
+-- Keep only the outermost {...}, dropping code fences or chatter around it.
+local function extract_json(text)
+  return text and (text:match("{.*}") or text)
+end
+
 -- Provider table: each entry knows its host, default model, API key env var,
 -- how to build a request for that API's shape, and how to pull the raw text
 -- back out of that API's response shape.
@@ -308,8 +322,10 @@ local PROVIDERS = {
   },
   claude = {
     host = "api.anthropic.com",
-    default_model = "claude-sonnet-5",
-    key_env = "ANTHROPIC_API_KEY",
+    default_model = "claude-haiku-5-5",
+    -- A dedicated name first: a global ANTHROPIC_API_KEY would also switch the
+    -- Claude Code CLI (used for Opus below) from the subscription to API billing.
+    key_env = { "ZEHNTAGE_ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY" },
     path = function(_)
       return "/v1/messages"
     end,
@@ -321,25 +337,35 @@ local PROVIDERS = {
       }
       local body = {
         model = model,
-        max_tokens = 1024,
+        max_tokens = 4096,
         stream = false,
         messages = { { role = "user", content = prompt } },
       }
+      -- Haiku 5.5 is the fast path: no thinking pass at low effort. Other
+      -- models keep their default thinking, with max_tokens headroom for it.
+      -- Exact ID only: Opus 5.5 rejects thinking "disabled" with a 400, so
+      -- the most it can be turned down is low effort (brief thinking).
+      if model == "claude-haiku-5-5" then
+        body.max_tokens = 1024
+        body.thinking = { type = "disabled" }
+        body.output_config = { effort = "low" }
+      elseif model == "claude-opus-5-5" then
+        body.output_config = { effort = "low" }
+      end
       if schema ~= nil then
-        body.system = "Respond with only a JSON object matching this schema, no other text: "
-          .. vim.json.encode(to_json_schema(schema))
+        body.system = json_system_prompt(schema)
       end
       return headers, body
     end,
-    -- Claude has no native structured-output param, so the schema is only a
-    -- prompt-level hint — strip a stray ```json fence before decoding.
+    -- The schema is only a prompt-level hint, and thinking blocks may come
+    -- first, so take the text block and trim anything around the JSON.
     parse = function(resp)
-      local block = resp.content and resp.content[1]
-      local text = block and block.text
-      if text then
-        text = text:gsub("^```json%s*", ""):gsub("```%s*$", "")
+      for _, block in ipairs(resp.content or {}) do
+        if block.type == "text" then
+          return extract_json(block.text)
+        end
       end
-      return text
+      return nil
     end,
   },
   cerebras = {
@@ -386,9 +412,16 @@ local function call_model(prompt, callback, schema)
     return
   end
 
-  local api_key = vim.env[provider.key_env]
-  if not api_key or api_key == "" then
-    set_float_content({ provider.key_env .. " not set" })
+  local key_envs = type(provider.key_env) == "table" and provider.key_env or { provider.key_env }
+  local api_key
+  for _, name in ipairs(key_envs) do
+    if vim.env[name] and vim.env[name] ~= "" then
+      api_key = vim.env[name]
+      break
+    end
+  end
+  if not api_key then
+    set_float_content({ key_envs[1] .. " not set" })
     return
   end
 
@@ -426,8 +459,99 @@ local function call_model(prompt, callback, schema)
   vim.fn.chansend(proxy_job, request .. "\n")
 end
 
-local function translate_word(word, context, callback)
-  local prompt = string.format(
+-- Opus via the Claude Code CLI ----------------------------------------------
+
+-- One-shot `claude -p` run (Opus, high effort): no tools, no MCP, no settings files (hooks), no
+-- saved session, started from the temp dir so no project CLAUDE.md applies.
+-- callback(text, err) with the JSON text of the answer.
+local function run_opus(prompt, schema, callback)
+  local out = {}
+  local err_out = {}
+  -- env -u: an API key in the environment would bill it instead of the
+  -- subscription.
+  local job = vim.fn.jobstart({
+    "env",
+    "-u",
+    "ANTHROPIC_API_KEY",
+    "claude",
+    "-p",
+    "--model", "opus",
+    "--effort", "high",
+    "--tools", "",
+    "--strict-mcp-config",
+    "--setting-sources", "",
+    "--no-session-persistence",
+    "--output-format", "json",
+    "--system-prompt", json_system_prompt(schema),
+  }, {
+    cwd = vim.uv.os_tmpdir(),
+    stdout_buffered = true,
+    stderr_buffered = true,
+    on_stdout = function(_, data)
+      out = data or {}
+    end,
+    on_stderr = function(_, data)
+      err_out = data or {}
+    end,
+    on_exit = function(_, code)
+      vim.schedule(function()
+        local raw = table.concat(out, "\n")
+        local ok, res = pcall(vim.json.decode, raw)
+        if not ok or type(res) ~= "table" then
+          local msg = vim.trim(table.concat(err_out, "\n") .. raw):sub(1, 200)
+          callback(nil, "claude exited " .. code .. ": " .. msg)
+        elseif res.is_error then
+          callback(nil, tostring(res.result or "claude reported an error"))
+        else
+          callback(extract_json(res.result), nil)
+        end
+      end)
+    end,
+  })
+  if job <= 0 then
+    callback(nil, "claude CLI not found")
+    return
+  end
+  vim.fn.chansend(job, prompt)
+  vim.fn.chanclose(job, "stdin")
+end
+
+-- Opus answers by lookup key ("w:<word>" / "p:<text>"), so a prefetch and a
+-- later request share one run. Failed runs are dropped, so a retry starts fresh.
+local opus_cache = {}
+
+local function opus_answer(key, prompt, schema, callback)
+  local entry = opus_cache[key]
+  if entry and entry.text then
+    if callback then
+      callback(entry.text, nil)
+    end
+    return
+  end
+  if not entry then
+    entry = { waiters = {} }
+    opus_cache[key] = entry
+    run_opus(prompt, schema, function(text, err)
+      if err then
+        opus_cache[key] = nil
+      else
+        entry.text = text
+      end
+      for _, cb in ipairs(entry.waiters) do
+        cb(text, err)
+      end
+      entry.waiters = {}
+    end)
+  end
+  if callback then
+    table.insert(entry.waiters, callback)
+  end
+end
+
+-- Prompts -------------------------------------------------------------------
+
+local function word_prompt(word, context)
+  return string.format(
     'The learner is a native Russian speaker, fluent in English, learning German. They are studying the word "%s", which appeared in the text below.\n'
       .. "\n"
       .. "Provide four fields:\n"
@@ -448,18 +572,35 @@ local function translate_word(word, context, callback)
     word,
     context
   )
-  call_model(prompt, function(text)
-    local ok, decoded = pcall(vim.json.decode, text)
-    if not ok or type(decoded) ~= "table" then
-      callback(text, "", "", "")
-      return
-    end
-    local article = decoded.article or ""
-    if article ~= "der" and article ~= "die" and article ~= "das" then
-      article = ""
-    end
-    callback(decoded.translation or "", decoded.notes or "", decoded.context or "", article)
-  end, WORD_SCHEMA)
+end
+
+-- Model JSON → a card entry (as stored in `words`).
+local function decode_word(word_raw, text, model)
+  local ok, decoded = pcall(vim.json.decode, text)
+  if not ok or type(decoded) ~= "table" then
+    decoded = { translation = text }
+  end
+  local article = decoded.article or ""
+  if article ~= "der" and article ~= "die" and article ~= "das" then
+    article = ""
+  end
+  return {
+    back = decoded.translation or "",
+    notes = decoded.notes or "",
+    context = decoded.context or "",
+    article = article,
+    front_full = (article ~= "") and (article .. " " .. word_raw) or word_raw,
+    model = model,
+  }
+end
+
+local function word_lines(entry)
+  local lines = { entry.front_full .. " → " .. entry.back }
+  if entry.notes ~= "" then
+    table.insert(lines, "")
+    table.insert(lines, entry.notes)
+  end
+  return lines
 end
 
 -- Floating window -----------------------------------------------------------
@@ -468,6 +609,12 @@ set_float_content = function(lines)
   if not float_buf or not vim.api.nvim_buf_is_valid(float_buf) then
     return
   end
+  -- Buffer lines can't contain newlines; model text (notes) sometimes does.
+  local flat = {}
+  for _, l in ipairs(lines) do
+    vim.list_extend(flat, vim.split(l, "\n"))
+  end
+  lines = flat
   vim.api.nvim_buf_set_lines(float_buf, 0, -1, false, lines)
 
   local max_width = 60
@@ -485,6 +632,14 @@ set_float_content = function(lines)
 
   if float_win and vim.api.nvim_win_is_valid(float_win) then
     vim.api.nvim_win_set_config(float_win, { width = width, height = height })
+  end
+end
+
+-- Update the float only if it is still the one identified by buf — late
+-- answers must not overwrite a float opened since for something else.
+local function update_float(buf, lines)
+  if buf and buf == float_buf then
+    set_float_content(lines)
   end
 end
 
@@ -613,51 +768,75 @@ local function zehntage()
   local context_lines = vim.api.nvim_buf_get_lines(0, start, finish, false)
   local context = table.concat(context_lines, "\n")
 
+  local prompt = word_prompt(word_raw, context)
+  if M.config.opus then
+    opus_answer("w:" .. word, prompt, WORD_SCHEMA) -- prefetch for the card
+  end
+
   -- Show float instantly with loading placeholder
   open_float(word_raw)
+  local buf = float_buf
 
-  translate_word(word_raw, context, function(translation, notes, model_context, article)
-    article = article or ""
-    local front_full = (article ~= "") and (article .. " " .. word_raw) or word_raw
-    words[word] = {
-      back = translation,
-      notes = notes,
-      context = model_context,
-      article = article,
-      front_full = front_full,
-    }
+  call_model(prompt, function(text)
+    local entry = decode_word(word_raw, text, "fast")
+    words[word] = entry
     highlight_buffer(0)
+    local lines = word_lines(entry)
 
-    -- Update float in-place if still open
-    local lines = { front_full .. " → " .. translation }
-    if notes ~= "" then
-      table.insert(lines, "")
-      table.insert(lines, notes)
-    end
-    set_float_content(lines)
-
-    -- Push the card to the Anki server (auto-push)
-    if anki_config() then
+    local function push(card, shown)
+      if not anki_config() then
+        table.insert(shown, "")
+        table.insert(shown, "(Anki: ZEHNTAGE_ANKI_URL/KEY not set)")
+        update_float(buf, shown)
+        return
+      end
       anki_request(
         "POST",
         "/zehntage/add",
-        { front = front_full, back = translation, notes = notes, context = model_context },
+        { front = card.front_full, back = card.back, notes = card.notes, context = card.context },
         function(_, err)
           if err then
-            local l = vim.deepcopy(lines)
-            table.insert(l, "")
-            table.insert(l, "(Anki: " .. err .. ")")
-            set_float_content(l)
+            table.insert(shown, "")
+            table.insert(shown, "(Anki: " .. err .. ")")
+            update_float(buf, shown)
+            vim.notify("ZehnTage: Anki add failed: " .. err, vim.log.levels.WARN)
           end
         end
       )
-    else
-      local l = vim.deepcopy(lines)
-      table.insert(l, "")
-      table.insert(l, "(Anki: ZEHNTAGE_ANKI_URL/KEY not set)")
-      set_float_content(l)
     end
-  end)
+
+    if not M.config.opus then
+      update_float(buf, lines)
+      push(entry, vim.deepcopy(lines))
+      return
+    end
+
+    -- The card is Opus's answer; the fast one is just there to read meanwhile.
+    local waiting = vim.deepcopy(lines)
+    table.insert(waiting, "")
+    table.insert(waiting, "(Anki: waiting for Opus…)")
+    update_float(buf, waiting)
+    opus_answer("w:" .. word, prompt, WORD_SCHEMA, function(opus_text, err)
+      -- Cleared (or looked up anew) meanwhile → this card is no longer wanted.
+      if words[word] ~= entry then
+        return
+      end
+      local card, shown = entry, vim.deepcopy(lines)
+      if opus_text then
+        card = decode_word(word_raw, opus_text, "Opus")
+        words[word] = card
+        highlight_buffer(0)
+        shown = word_lines(card)
+        table.insert(shown, "")
+        table.insert(shown, "(card: Opus)")
+      else
+        table.insert(shown, "")
+        table.insert(shown, "(Opus failed: " .. err .. " — saved this answer)")
+      end
+      update_float(buf, shown)
+      push(card, shown)
+    end)
+  end, WORD_SCHEMA)
 end
 
 local function zehntage_clear()
@@ -702,13 +881,13 @@ local function get_visual_selection()
   return table.concat(buf_lines, "\n")
 end
 
-local function zehntage_translate()
+-- What to ask about the visual selection: the prompt, its schema, a cache
+-- key, and how to turn the answer into float lines. nil for empty selection.
+local function selection_request()
   local text = get_visual_selection()
   if text:match("^%s*$") then
-    return
+    return nil
   end
-
-  open_float({ "Loading..." })
 
   local word_count = select(2, text:gsub("%S+", "%0"))
   if word_count > 100 then
@@ -720,22 +899,26 @@ local function zehntage_translate()
         .. "===",
       text
     )
-    call_model(prompt, function(response_text)
-      local ok, decoded = pcall(vim.json.decode, response_text)
-      local translation
-      if ok and type(decoded) == "table" and decoded.translation then
-        translation = decoded.translation
-      else
-        translation = response_text
-      end
-      set_float_content(vim.split(translation, "\n"))
-    end, TRANSLATE_SCHEMA)
-    return
+    return {
+      key = "s:" .. text,
+      prompt = prompt,
+      schema = TRANSLATE_SCHEMA,
+      render = function(response_text)
+        local ok, decoded = pcall(vim.json.decode, response_text)
+        if ok and type(decoded) == "table" and decoded.translation then
+          return vim.split(decoded.translation, "\n")
+        end
+        return vim.split(response_text, "\n")
+      end,
+    }
   end
 
   -- Gather surrounding context: the selected lines plus one above and one below.
-  local sr = vim.fn.getpos("'<")[2]
-  local er = vim.fn.getpos("'>")[2]
+  local sr = vim.fn.getpos("v")[2]
+  local er = vim.fn.getpos(".")[2]
+  if vim.fn.mode():match("^[vV\22]") == nil then
+    sr, er = vim.fn.getpos("'<")[2], vim.fn.getpos("'>")[2]
+  end
   if er < sr then
     sr, er = er, sr
   end
@@ -762,25 +945,86 @@ local function zehntage_translate()
     text,
     context
   )
-  call_model(prompt, function(response_text)
-    local ok, decoded = pcall(vim.json.decode, response_text)
-    local translation, notes
-    if ok and type(decoded) == "table" and decoded.translation then
-      translation = decoded.translation
-      notes = decoded.notes or ""
-    else
-      translation = response_text
-      notes = ""
-    end
-    local lines = vim.split(translation, "\n")
-    if notes ~= "" then
-      table.insert(lines, "")
-      for _, l in ipairs(vim.split(notes, "\n")) do
-        table.insert(lines, l)
+  return {
+    key = "p:" .. text,
+    prompt = prompt,
+    schema = REF_SCHEMA,
+    render = function(response_text)
+      local ok, decoded = pcall(vim.json.decode, response_text)
+      local translation, notes
+      if ok and type(decoded) == "table" and decoded.translation then
+        translation = decoded.translation
+        notes = decoded.notes or ""
+      else
+        translation = response_text
+        notes = ""
       end
+      local lines = vim.split(translation, "\n")
+      if notes ~= "" then
+        table.insert(lines, "")
+        for _, l in ipairs(vim.split(notes, "\n")) do
+          table.insert(lines, l)
+        end
+      end
+      return lines
+    end,
+  }
+end
+
+local function zehntage_translate()
+  local req = selection_request()
+  if not req then
+    return
+  end
+  if M.config.opus then
+    opus_answer(req.key, req.prompt, req.schema) -- prefetch for <leader>zo
+  end
+  open_float({ "Loading..." })
+  local buf = float_buf
+  call_model(req.prompt, function(response_text)
+    update_float(buf, req.render(response_text))
+  end, req.schema)
+end
+
+-- Opus's answer for the visual selection, or for the word under the cursor.
+-- Shares the cache with the prefetch from K / ZehnTageTranslate, so it is
+-- usually instant.
+local function zehntage_opus()
+  local key, prompt, schema, render
+  if vim.fn.mode():match("^[vV\22]") then
+    local req = selection_request()
+    if not req then
+      return
     end
-    set_float_content(lines)
-  end, REF_SCHEMA)
+    key, prompt, schema, render = req.key, req.prompt, req.schema, req.render
+  else
+    local word_raw = vim.fn.expand("<cword>")
+    if word_raw == "" then
+      return
+    end
+    local row = vim.api.nvim_win_get_cursor(0)[1]
+    local line_count = vim.api.nvim_buf_line_count(0)
+    local context_lines = vim.api.nvim_buf_get_lines(0, math.max(0, row - 2), math.min(line_count, row + 1), false)
+    key = "w:" .. word_raw:lower()
+    prompt = word_prompt(word_raw, table.concat(context_lines, "\n"))
+    schema = WORD_SCHEMA
+    render = function(text)
+      return word_lines(decode_word(word_raw, text, "Opus"))
+    end
+  end
+
+  open_float({ "Opus…" })
+  local buf = float_buf
+  opus_answer(key, prompt, schema, function(text, err)
+    if err then
+      update_float(buf, { "Opus failed: " .. err })
+      return
+    end
+    local lines = render(text)
+    table.insert(lines, "")
+    table.insert(lines, "(Opus)")
+    update_float(buf, lines)
+  end)
 end
 
 local function zehntage_note(opts)
@@ -805,6 +1049,11 @@ end
 
 M.setup = function(opts)
   M.config = vim.tbl_extend("force", M.config, opts or {})
+  -- Answers already come from Opus over the API: the CLI second opinion would
+  -- only repeat them (and cards are built from the answer as before).
+  if M.config.provider == "claude" and (M.config.model or ""):find("opus", 1, true) then
+    M.config.opus = false
+  end
 
   -- Source of truth for learned words is the Anki MCP server.
   if anki_config() then
@@ -842,6 +1091,7 @@ M.setup = function(opts)
   vim.api.nvim_create_user_command("ZehnTage", zehntage, {})
   vim.api.nvim_create_user_command("ZehnTageClear", zehntage_clear, {})
   vim.api.nvim_create_user_command("ZehnTageTranslate", zehntage_translate, { range = true })
+  vim.api.nvim_create_user_command("ZehnTageOpus", zehntage_opus, { range = true })
   vim.api.nvim_create_user_command("ZehnTageNote", zehntage_note, { nargs = "+" })
 
   vim.api.nvim_create_autocmd("VimLeave", {
